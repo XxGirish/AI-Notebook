@@ -4,7 +4,7 @@ AI Notebook is a local-first spatial learning notebook for writing, drawing, edi
 
 The project is currently building on the selected **Konva hybrid** architecture: Konva + react-konva + perfect-freehand for ink and spatial graphics, with accessible React components for learning cards.
 
-The current editor foundation includes a persistent page sidebar with create/open/rename/confirmed-delete actions backed by Dexie/IndexedDB, a world-coordinate camera, wheel/button zoom, hand-tool panning, improved pressure-aware pen rendering, a translucent highlighter, semantic whole-stroke erasing, movable graph/card objects, freeform lasso and additive selection, relationship-safe duplication/deletion, and shared undo/redo. Recovery/migrations, resize/grouping, object creation, performance, export, and physical-device validation still require implementation.
+The current editor foundation includes a persistent page sidebar with create/open/rename/confirmed-delete actions backed by Dexie/IndexedDB, a world-coordinate camera, pen/highlighter/eraser and navigation tools, editable and resizable text notes, drag-to-size rectangle/ellipse tools with live previews, bound connectors between selected shapes, movable learning objects, freeform lasso and additive selection, relationship-safe duplication/deletion, and shared undo/redo. Recovery/migrations, grouping, image insertion, richer text tools, performance, export, and physical-device validation still require implementation.
 
 ## Run locally
 

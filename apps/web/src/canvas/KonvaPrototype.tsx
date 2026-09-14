@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type WheelEvent as ReactWheelEvent } from "react";
-import { Arrow, Group, Layer, Line, Path, Rect, Stage, Text } from "react-konva";
+import { Arrow, Circle, Ellipse, Group, Layer, Line, Path, Rect, Stage, Text } from "react-konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import { commitHistory, createHistory, redoHistory, undoHistory } from "../domain/history";
 import type {
@@ -7,11 +7,13 @@ import type {
   NotebookFixture,
   NotebookObject,
   PointSample,
+  ShapeObject,
   StrokeObject,
 } from "../domain/notebook";
 import { LearningCard } from "../components/LearningCard";
 import { getStrokePath } from "./strokePath";
 import { objectIntersectsPolygon } from "./selectionMath";
+import { boundsFromPoints, type CanvasBounds } from "./shapeMath";
 import { appendDistinctPoints, strokeIntersectsPoint } from "./strokeMath";
 import { useElementSize } from "./useElementSize";
 
@@ -19,14 +21,17 @@ type Props = {
   fixture: NotebookFixture;
   onObjectsChange?: (objects: NotebookObject[]) => void;
 };
-type Tool = "select" | "lasso" | "pen" | "highlighter" | "eraser" | "pan";
+type Tool = "select" | "lasso" | "pen" | "highlighter" | "eraser" | "rectangle" | "ellipse" | "pan";
 type Position = { x: number; y: number };
+type Size = { width: number; height: number };
 type Camera = Position & { scale: number };
 type Gesture = {
   pointerId: number;
-  kind: "stroke" | "erase" | "pan" | "lasso";
+  kind: "stroke" | "erase" | "pan" | "lasso" | "shape";
   lastScreen: Position;
   strokeTool?: StrokeObject["tool"];
+  startWorld?: Position;
+  shapeType?: ShapeObject["shape"];
 };
 
 const MIN_ZOOM = 0.25;
@@ -35,6 +40,7 @@ const MAX_ZOOM = 3;
 const clampZoom = (scale: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, scale));
 const isStroke = (object: NotebookObject): object is StrokeObject => object.kind === "stroke";
 const isGraphNode = (object: NotebookObject): object is GraphNodeObject => object.kind === "graph-node";
+const isShape = (object: NotebookObject): object is ShapeObject => object.kind === "shape";
 
 export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -47,11 +53,14 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
   const [fingerDrawing, setFingerDrawing] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [transientPositions, setTransientPositions] = useState<Record<string, Position>>({});
+  const [transientSizes, setTransientSizes] = useState<Record<string, Size>>({});
   const [liveStroke, setLiveStroke] = useState<PointSample[]>([]);
   const [lassoPoints, setLassoPoints] = useState<PointSample[]>([]);
+  const [draftShape, setDraftShape] = useState<(CanvasBounds & { shape: ShapeObject["shape"] })>();
   const [erasingIds, setErasingIds] = useState<Set<string>>(() => new Set());
   const liveStrokeRef = useRef<PointSample[]>([]);
   const lassoPointsRef = useRef<PointSample[]>([]);
+  const draftShapeRef = useRef<(CanvasBounds & { shape: ShapeObject["shape"] })>();
   const erasingIdsRef = useRef<Set<string>>(new Set());
   const gestureRef = useRef<Gesture>();
   const animationFrameRef = useRef<number>();
@@ -60,11 +69,13 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
   const objects = history.present;
   const strokes = objects.filter(isStroke);
   const nodes = objects.filter(isGraphNode);
+  const shapes = objects.filter(isShape);
   const connectors = objects.filter((object) => object.kind === "connector");
   const cards = objects.filter(
     (object) => object.kind === "text-card" || object.kind === "equation-card" || object.kind === "quiz-card",
   );
-  const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
+  const connectables = useMemo(() => [...nodes, ...shapes], [nodes, shapes]);
+  const connectableById = useMemo(() => new Map(connectables.map((object) => [object.id, object])), [connectables]);
 
   useEffect(() => () => {
     if (animationFrameRef.current !== undefined) cancelAnimationFrame(animationFrameRef.current);
@@ -88,7 +99,7 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
         event.preventDefault();
         setHistory(redoHistory);
       } else if (!modifier) {
-        const shortcut: Partial<Record<string, Tool>> = { v: "select", l: "lasso", p: "pen", h: "highlighter", e: "eraser", " ": "pan" };
+        const shortcut: Partial<Record<string, Tool>> = { v: "select", l: "lasso", p: "pen", h: "highlighter", e: "eraser", r: "rectangle", o: "ellipse", " ": "pan" };
         const nextTool = shortcut[event.key.toLowerCase()];
         if (nextTool) {
           event.preventDefault();
@@ -101,6 +112,7 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
   }, []);
 
   const positionFor = (object: NotebookObject) => transientPositions[object.id] ?? { x: object.x, y: object.y };
+  const sizeFor = (object: NotebookObject) => transientSizes[object.id] ?? { width: object.width, height: object.height };
 
   const commitObjects = (update: (objects: NotebookObject[]) => NotebookObject[]) => {
     setHistory((current) => commitHistory(current, update(current.present)));
@@ -119,6 +131,29 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
       delete next[id];
       return next;
     });
+  };
+
+  const previewSize = (id: string, nextSize: Size) => {
+    setTransientSizes((current) => ({ ...current, [id]: nextSize }));
+  };
+
+  const commitSize = (id: string, nextSize: Size) => {
+    commitObjects((current) => current.map((object) =>
+      object.id === id ? { ...object, width: nextSize.width, height: nextSize.height, revision: object.revision + 1 } : object,
+    ));
+    setTransientSizes((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+  };
+
+  const updateTextCard = (id: string, title: string, body: string) => {
+    commitObjects((current) => current.map((object) =>
+      object.id === id && object.kind === "text-card"
+        ? { ...object, title, body, revision: object.revision + 1 }
+        : object,
+    ));
   };
 
   const selectObject = (id: string, additive = false) => {
@@ -175,6 +210,45 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
     setSelectedIds(new Set(copies.filter((object) => object.kind !== "connector").map((object) => object.id)));
   };
 
+  const insertionPoint = (width: number, height: number) => ({
+    x: (size.width / 2 - camera.x) / camera.scale - width / 2 + (objects.length % 5) * 24,
+    y: (size.height / 2 - camera.y) / camera.scale - height / 2 + (objects.length % 5) * 24,
+  });
+
+  const insertNote = () => {
+    const dimensions = { width: 270, height: 160 };
+    const object: NotebookObject = {
+      id: `text-card-${crypto.randomUUID()}`,
+      revision: 1,
+      kind: "text-card",
+      ...insertionPoint(dimensions.width, dimensions.height),
+      ...dimensions,
+      title: "New note",
+      body: "Add your ideas here.",
+    };
+    commitObjects((current) => [...current, object]);
+    setSelectedIds(new Set([object.id]));
+    setTool("select");
+  };
+
+  const selectedConnectables = connectables.filter((object) => selectedIds.has(object.id));
+  const connectSelection = () => {
+    if (selectedConnectables.length !== 2) return;
+    const connector: NotebookObject = {
+      id: `connector-${crypto.randomUUID()}`,
+      revision: 1,
+      kind: "connector",
+      x: 0,
+      y: 0,
+      width: 0,
+      height: 0,
+      fromId: selectedConnectables[0].id,
+      toId: selectedConnectables[1].id,
+    };
+    commitObjects((current) => [...current, connector]);
+    setSelectedIds(new Set([connector.id]));
+  };
+
   const screenToWorld = (clientX: number, clientY: number, rect: DOMRect, pressure: number, time: number): PointSample => ({
     x: (clientX - rect.left - camera.x) / camera.scale,
     y: (clientY - rect.top - camera.y) / camera.scale,
@@ -224,23 +298,31 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
         ? "erase"
         : tool === "lasso"
           ? "lasso"
-          : "stroke";
+          : tool === "rectangle" || tool === "ellipse"
+            ? "shape"
+            : "stroke";
+    const startPoint = pointFromPointer(nativeEvent, rect);
     gestureRef.current = {
       pointerId: nativeEvent.pointerId,
       kind,
       lastScreen: { x: nativeEvent.clientX, y: nativeEvent.clientY },
       strokeTool: tool === "highlighter" ? "highlighter" : "pen",
+      startWorld: kind === "shape" ? startPoint : undefined,
+      shapeType: tool === "rectangle" || tool === "ellipse" ? tool : undefined,
     };
 
     if (kind === "stroke") {
       liveStrokeRef.current = [pointFromPointer(nativeEvent, rect)];
       scheduleLiveStrokeRender();
     } else if (kind === "lasso") {
-      const point = pointFromPointer(nativeEvent, rect);
-      lassoPointsRef.current = [point];
-      setLassoPoints([point]);
+      lassoPointsRef.current = [startPoint];
+      setLassoPoints([startPoint]);
+    } else if (kind === "shape") {
+      const draft = { ...boundsFromPoints(startPoint, startPoint), shape: gestureRef.current.shapeType ?? "rectangle" };
+      draftShapeRef.current = draft;
+      setDraftShape(draft);
     } else if (kind === "erase") {
-      eraseAt(pointFromPointer(nativeEvent, rect));
+      eraseAt(startPoint);
     }
   };
 
@@ -269,6 +351,11 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
     } else if (gesture.kind === "lasso") {
       lassoPointsRef.current = appendDistinctPoints(lassoPointsRef.current, points, 1 / camera.scale);
       setLassoPoints([...lassoPointsRef.current]);
+    } else if (gesture.kind === "shape" && gesture.startWorld) {
+      const bounds = boundsFromPoints(gesture.startWorld, points.at(-1) ?? gesture.startWorld);
+      const draft = { ...bounds, shape: gesture.shapeType ?? "rectangle" };
+      draftShapeRef.current = draft;
+      setDraftShape(draft);
     } else {
       points.forEach(eraseAt);
     }
@@ -319,12 +406,34 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
       setTool("select");
     }
 
+    const completedShape = draftShapeRef.current;
+    if (!cancelled && gesture.kind === "shape" && completedShape && completedShape.width >= 8 && completedShape.height >= 8) {
+      const shapeType = gesture.shapeType ?? "rectangle";
+      const object: ShapeObject = {
+        id: `shape-${crypto.randomUUID()}`,
+        revision: 1,
+        kind: "shape",
+        shape: shapeType,
+        x: completedShape.x,
+        y: completedShape.y,
+        width: completedShape.width,
+        height: completedShape.height,
+        fill: shapeType === "ellipse" ? "#fff1cf" : "#e4efed",
+        stroke: shapeType === "ellipse" ? "#a3672c" : "#2c5f5d",
+      };
+      commitObjects((current) => [...current, object]);
+      setSelectedIds(new Set([object.id]));
+      setTool("select");
+    }
+
     gestureRef.current = undefined;
     liveStrokeRef.current = [];
     lassoPointsRef.current = [];
+    draftShapeRef.current = undefined;
     erasingIdsRef.current = new Set();
     setLiveStroke([]);
     setLassoPoints([]);
+    setDraftShape(undefined);
     setErasingIds(new Set());
   };
 
@@ -364,6 +473,8 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
             ["pen", "Pen", "P"],
             ["highlighter", "Highlight", "H"],
             ["eraser", "Eraser", "E"],
+            ["rectangle", "Rectangle", "R"],
+            ["ellipse", "Ellipse", "O"],
             ["pan", "Hand", "Space"],
           ] as const).map(([value, label, shortcut]) => (
             <button key={value} type="button" aria-pressed={tool === value} onClick={() => setTool(value)} title={`${label} (${shortcut})`}>
@@ -397,6 +508,11 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
           <button type="button" disabled={history.future.length === 0} onClick={() => setHistory(redoHistory)} title="Redo (Ctrl+Y)">Redo</button>
         </div>
 
+        <div className="tool-group" role="group" aria-label="Insert objects">
+          <button type="button" onClick={insertNote}>Note</button>
+          <button type="button" disabled={selectedConnectables.length !== 2} onClick={connectSelection}>Connect</button>
+        </div>
+
         <div className="tool-group" role="group" aria-label="Selection actions">
           <span>{selectedIds.size} selected</span>
           <button type="button" disabled={selectedIds.size === 0} onClick={duplicateSelection}>Duplicate</button>
@@ -419,26 +535,69 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
             <Layer listening={tool === "select"}>
               <Group x={camera.x} y={camera.y} scaleX={camera.scale} scaleY={camera.scale}>
                 {connectors.map((connector) => {
-                  const from = nodeById.get(connector.fromId);
-                  const to = nodeById.get(connector.toId);
+                  const from = connectableById.get(connector.fromId);
+                  const to = connectableById.get(connector.toId);
                   if (!from || !to) return null;
                   const fromPosition = positionFor(from);
                   const toPosition = positionFor(to);
+                  const fromSize = sizeFor(from);
+                  const toSize = sizeFor(to);
                   return (
                     <Arrow
                       key={connector.id}
-                      points={[fromPosition.x + from.width, fromPosition.y + from.height / 2, toPosition.x, toPosition.y + to.height / 2]}
-                      stroke="#537188"
-                      fill="#537188"
-                      strokeWidth={2.5}
+                      points={[fromPosition.x + fromSize.width, fromPosition.y + fromSize.height / 2, toPosition.x, toPosition.y + toSize.height / 2]}
+                      stroke={selectedIds.has(connector.id) ? "#ef8c45" : "#537188"}
+                      fill={selectedIds.has(connector.id) ? "#ef8c45" : "#537188"}
+                      strokeWidth={selectedIds.has(connector.id) ? 3.5 : 2.5}
                       pointerLength={9}
                       pointerWidth={8}
+                      hitStrokeWidth={16}
+                      onPointerDown={(event) => selectObject(connector.id, event.evt.shiftKey)}
                     />
+                  );
+                })}
+
+                {shapes.map((shape) => {
+                  const position = positionFor(shape);
+                  const dimensions = sizeFor(shape);
+                  const selected = selectedIds.has(shape.id);
+                  return (
+                    <Group
+                      key={shape.id}
+                      x={position.x}
+                      y={position.y}
+                      draggable={tool === "select"}
+                      onPointerDown={(event) => selectObject(shape.id, event.evt.shiftKey)}
+                      onDragMove={(event) => previewPosition(shape.id, { x: event.target.x(), y: event.target.y() })}
+                      onDragEnd={(event) => commitPosition(shape.id, { x: event.target.x(), y: event.target.y() })}
+                    >
+                      {shape.shape === "ellipse" ? (
+                        <Ellipse x={dimensions.width / 2} y={dimensions.height / 2} radiusX={dimensions.width / 2} radiusY={dimensions.height / 2} fill={shape.fill} stroke={selected ? "#ef8c45" : shape.stroke} strokeWidth={selected ? 3 : 2} />
+                      ) : (
+                        <Rect width={dimensions.width} height={dimensions.height} fill={shape.fill} stroke={selected ? "#ef8c45" : shape.stroke} strokeWidth={selected ? 3 : 2} cornerRadius={12} />
+                      )}
+                      {selected && (
+                        <Circle
+                          x={dimensions.width}
+                          y={dimensions.height}
+                          radius={8 / camera.scale}
+                          fill="#ef8c45"
+                          stroke="white"
+                          strokeWidth={2 / camera.scale}
+                          draggable
+                          onPointerDown={(event) => { event.cancelBubble = true; }}
+                          onDragMove={(event) => previewSize(shape.id, { width: Math.max(40, event.target.x()), height: Math.max(40, event.target.y()) })}
+                          onDragEnd={(event) => commitSize(shape.id, { width: Math.max(40, event.target.x()), height: Math.max(40, event.target.y()) })}
+                        />
+                      )}
+                    </Group>
                   );
                 })}
 
                 {nodes.map((node) => {
                   const position = positionFor(node);
+                  const dimensions = sizeFor(node);
+                  const selected = selectedIds.has(node.id);
                   return (
                     <Group
                       key={node.id}
@@ -450,16 +609,30 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
                       onDragEnd={(event) => commitPosition(node.id, { x: event.target.x(), y: event.target.y() })}
                     >
                       <Rect
-                        width={node.width}
-                        height={node.height}
+                        width={dimensions.width}
+                        height={dimensions.height}
                         fill="#e7f0ef"
-                        stroke={selectedIds.has(node.id) ? "#ef8c45" : "#2c5f5d"}
-                        strokeWidth={selectedIds.has(node.id) ? 3 : 2}
+                        stroke={selected ? "#ef8c45" : "#2c5f5d"}
+                        strokeWidth={selected ? 3 : 2}
                         cornerRadius={18}
                         shadowBlur={8}
                         shadowOpacity={0.08}
                       />
-                      <Text width={node.width} height={node.height} text={node.label} align="center" verticalAlign="middle" fontSize={17} fontFamily="Inter, sans-serif" fill="#163b3a" />
+                      <Text width={dimensions.width} height={dimensions.height} text={node.label} align="center" verticalAlign="middle" fontSize={17} fontFamily="Inter, sans-serif" fill="#163b3a" />
+                      {selected && (
+                        <Circle
+                          x={dimensions.width}
+                          y={dimensions.height}
+                          radius={8 / camera.scale}
+                          fill="#ef8c45"
+                          stroke="white"
+                          strokeWidth={2 / camera.scale}
+                          draggable
+                          onPointerDown={(event) => { event.cancelBubble = true; }}
+                          onDragMove={(event) => previewSize(node.id, { width: Math.max(80, event.target.x()), height: Math.max(48, event.target.y()) })}
+                          onDragEnd={(event) => commitSize(node.id, { width: Math.max(80, event.target.x()), height: Math.max(48, event.target.y()) })}
+                        />
+                      )}
                     </Group>
                   );
                 })}
@@ -478,11 +651,15 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
               key={card.id}
               object={card}
               position={positionFor(card)}
+              size={sizeFor(card)}
               cameraScale={camera.scale}
               selected={selectedIds.has(card.id)}
               onSelect={(additive) => selectObject(card.id, additive)}
               onMove={(position) => previewPosition(card.id, position)}
               onMoveEnd={(position) => commitPosition(card.id, position)}
+              onResize={(nextSize) => previewSize(card.id, nextSize)}
+              onResizeEnd={(nextSize) => commitSize(card.id, nextSize)}
+              onEditText={(title, body) => updateTextCard(card.id, title, body)}
             />
           ))}
         </div>
@@ -530,6 +707,32 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
                     dash={[8 / camera.scale, 6 / camera.scale]}
                   />
                 )}
+                {draftShape && (
+                  draftShape.shape === "ellipse" ? (
+                    <Ellipse
+                      x={draftShape.x + draftShape.width / 2}
+                      y={draftShape.y + draftShape.height / 2}
+                      radiusX={draftShape.width / 2}
+                      radiusY={draftShape.height / 2}
+                      fill="rgba(255, 241, 207, 0.72)"
+                      stroke="#a3672c"
+                      strokeWidth={2 / camera.scale}
+                      dash={[7 / camera.scale, 5 / camera.scale]}
+                    />
+                  ) : (
+                    <Rect
+                      x={draftShape.x}
+                      y={draftShape.y}
+                      width={draftShape.width}
+                      height={draftShape.height}
+                      fill="rgba(228, 239, 237, 0.72)"
+                      stroke="#2c5f5d"
+                      strokeWidth={2 / camera.scale}
+                      dash={[7 / camera.scale, 5 / camera.scale]}
+                      cornerRadius={12}
+                    />
+                  )
+                )}
                 {liveStroke.length > 1 && (
                   <Path
                     data={getStrokePath(liveStroke, currentStrokeSize, currentStrokeTool)}
@@ -546,6 +749,7 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
         <div className="canvas-status" aria-live="polite">
           <span>{tool === "eraser" ? "Whole-stroke eraser" : `${tool[0].toUpperCase()}${tool.slice(1)} tool`}</span>
           <span>{strokes.length} strokes</span>
+          <span>{objects.length} objects</span>
           <span>Wheel: pan · Ctrl+wheel: zoom</span>
         </div>
       </div>

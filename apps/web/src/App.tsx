@@ -126,7 +126,7 @@ export function App() {
       <div className="notebook-workspace">
         <header className="app-header">
           <div>
-            <p className="eyebrow">Editor foundation · Milestone 2</p>
+            <p className="eyebrow">Editor foundation · Milestone 3</p>
             <h1>{activePage?.title ?? "Opening notebook…"}</h1>
             <p>Konva canvas rendering with accessible React learning cards.</p>
           </div>
@@ -134,8 +134,8 @@ export function App() {
         </header>
 
         <aside className="experiment-banner">
-          <strong>Local page history is live.</strong>
-          <span>Create, open, and rename independent pages. Committed canvas edits are saved to this browser.</span>
+          <strong>Editable learning objects are live.</strong>
+          <span>Create notes and shapes, resize them, connect selected shapes, and keep every committed change locally.</span>
         </aside>
 
         {activePage && (

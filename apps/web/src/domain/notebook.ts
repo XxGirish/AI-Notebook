@@ -39,6 +39,13 @@ export type GraphNodeObject = ObjectBase & {
   label: string;
 };
 
+export type ShapeObject = ObjectBase & {
+  kind: "shape";
+  shape: "rectangle" | "ellipse";
+  fill: string;
+  stroke: string;
+};
+
 export type ConnectorObject = ObjectBase & {
   kind: "connector";
   fromId: string;
@@ -64,6 +71,7 @@ export type NotebookObject =
   | TextCardObject
   | EquationCardObject
   | GraphNodeObject
+  | ShapeObject
   | ConnectorObject
   | QuizCardObject;
 
@@ -101,4 +109,3 @@ export function validateFixture(fixture: NotebookFixture): string[] {
 
   return errors;
 }
-
