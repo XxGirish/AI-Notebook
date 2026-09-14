@@ -1,0 +1,41 @@
+import type { NotebookFixture, NotebookObject } from "./notebook";
+
+export type NotebookPage = NotebookFixture & {
+  createdAt: number;
+  updatedAt: number;
+};
+
+export const normalizePageTitle = (title: string, fallback = "Untitled page") => {
+  const normalized = title.replace(/\s+/g, " ").trim();
+  return normalized || fallback;
+};
+
+export function createNotebookPage(title: string, now = Date.now()): NotebookPage {
+  return {
+    schemaVersion: 1,
+    id: `page-${crypto.randomUUID()}`,
+    title: normalizePageTitle(title),
+    width: 1280,
+    height: 820,
+    objects: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+export function pageFromFixture(fixture: NotebookFixture, now = Date.now()): NotebookPage {
+  return {
+    ...fixture,
+    objects: structuredClone(fixture.objects),
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+export function renamePage(page: NotebookPage, title: string, now = Date.now()): NotebookPage {
+  return { ...page, title: normalizePageTitle(title, page.title), updatedAt: now };
+}
+
+export function replacePageObjects(page: NotebookPage, objects: NotebookObject[], now = Date.now()): NotebookPage {
+  return { ...page, objects, updatedAt: now };
+}
