@@ -12,6 +12,7 @@ import type {
 } from "../domain/notebook";
 import { LearningCard } from "../components/LearningCard";
 import { getStrokePath } from "./strokePath";
+import { expandGroupedIds, groupObjects, translateObjectGroup, ungroupObjects } from "./groupMath";
 import { objectIntersectsPolygon } from "./selectionMath";
 import { boundsFromPoints, type CanvasBounds } from "./shapeMath";
 import { appendDistinctPoints, strokeIntersectsPoint } from "./strokeMath";
@@ -167,16 +168,28 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
   };
 
   const previewPosition = (id: string, position: Position) => {
-    setTransientPositions((current) => ({ ...current, [id]: position }));
+    const anchor = objects.find((object) => object.id === id);
+    if (!anchor) return;
+    const members = anchor.groupId ? objects.filter((object) => object.groupId === anchor.groupId) : [anchor];
+    const delta = { x: position.x - anchor.x, y: position.y - anchor.y };
+    setTransientPositions((current) => {
+      const next = { ...current };
+      for (const member of members) {
+        if (member.kind !== "connector") next[member.id] = { x: member.x + delta.x, y: member.y + delta.y };
+      }
+      return next;
+    });
   };
 
   const commitPosition = (id: string, position: Position) => {
-    commitObjects((current) => current.map((object) =>
-      object.id === id ? { ...object, x: position.x, y: position.y, revision: object.revision + 1 } : object,
-    ));
+    const anchor = objects.find((object) => object.id === id);
+    const movedIds = new Set(anchor?.groupId
+      ? objects.filter((object) => object.groupId === anchor.groupId).map((object) => object.id)
+      : [id]);
+    commitObjects((current) => translateObjectGroup(current, id, position));
     setTransientPositions((current) => {
       const next = { ...current };
-      delete next[id];
+      for (const movedId of movedIds) delete next[movedId];
       return next;
     });
   };
@@ -205,11 +218,15 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
   };
 
   const selectObject = (id: string, additive = false) => {
+    const targetIds = expandGroupedIds(objects, new Set([id]));
     setSelectedIds((current) => {
-      if (!additive) return new Set([id]);
+      if (!additive) return targetIds;
       const next = new Set(current);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      const remove = [...targetIds].every((targetId) => next.has(targetId));
+      for (const targetId of targetIds) {
+        if (remove) next.delete(targetId);
+        else next.add(targetId);
+      }
       return next;
     });
   };
@@ -232,12 +249,17 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
     );
     const sources = [...selectedObjects, ...boundConnectors.filter((connector) => !selectedIds.has(connector.id))];
     const idMap = new Map(sources.map((object) => [object.id, `${object.kind}-${crypto.randomUUID()}`]));
+    const groupIdMap = new Map(
+      sources.filter((object) => object.groupId).map((object) => [object.groupId!, `group-${crypto.randomUUID()}`]),
+    );
     const copies = sources.map((object): NotebookObject => {
+      const groupId = object.groupId ? groupIdMap.get(object.groupId) : undefined;
       if (object.kind === "connector") {
         return {
           ...object,
           id: idMap.get(object.id)!,
           revision: 1,
+          groupId,
           fromId: idMap.get(object.fromId) ?? object.fromId,
           toId: idMap.get(object.toId) ?? object.toId,
         };
@@ -247,15 +269,39 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
           ...object,
           id: idMap.get(object.id)!,
           revision: 1,
+          groupId,
           x: object.x + 32,
           y: object.y + 32,
           points: object.points.map((point) => ({ ...point, x: point.x + 32, y: point.y + 32 })),
         };
       }
-      return { ...object, id: idMap.get(object.id)!, revision: 1, x: object.x + 32, y: object.y + 32 };
+      return { ...object, id: idMap.get(object.id)!, revision: 1, groupId, x: object.x + 32, y: object.y + 32 };
     });
     commitObjects((current) => [...current, ...copies]);
     setSelectedIds(new Set(copies.filter((object) => object.kind !== "connector").map((object) => object.id)));
+  };
+
+  const selectedObjects = objects.filter((object) => selectedIds.has(object.id));
+  const selectedVisualObjects = selectedObjects.filter((object) => object.kind !== "connector");
+  const selectedGroupIds = new Set(selectedObjects.flatMap((object) => object.groupId ? [object.groupId] : []));
+  const canGroup = selectedVisualObjects.length >= 2
+    && !(selectedGroupIds.size === 1 && selectedObjects.every((object) => object.groupId && selectedGroupIds.has(object.groupId)));
+  const canUngroup = selectedGroupIds.size > 0;
+
+  const groupSelection = () => {
+    if (!canGroup) return;
+    const groupId = `group-${crypto.randomUUID()}`;
+    const boundConnectorIds = connectors
+      .filter((connector) => selectedIds.has(connector.fromId) && selectedIds.has(connector.toId))
+      .map((connector) => connector.id);
+    const groupedIds = new Set([...selectedIds, ...boundConnectorIds]);
+    commitObjects((current) => groupObjects(current, groupedIds, groupId));
+    setSelectedIds(groupedIds);
+  };
+
+  const ungroupSelection = () => {
+    if (!canUngroup) return;
+    commitObjects((current) => ungroupObjects(current, selectedIds));
   };
 
   const insertionPoint = (width: number, height: number) => ({
@@ -442,15 +488,15 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
     }
 
     if (!cancelled && gesture.kind === "lasso" && lassoPointsRef.current.length > 2) {
-      const selected = new Set(
+      const directSelection = new Set(
         objects
           .filter((object) => object.kind !== "connector" && objectIntersectsPolygon(object, lassoPointsRef.current))
           .map((object) => object.id),
       );
       for (const connector of connectors) {
-        if (selected.has(connector.fromId) && selected.has(connector.toId)) selected.add(connector.id);
+        if (directSelection.has(connector.fromId) && directSelection.has(connector.toId)) directSelection.add(connector.id);
       }
-      setSelectedIds(selected);
+      setSelectedIds(expandGroupedIds(objects, directSelection));
       setTool("select");
     }
 
@@ -572,6 +618,8 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
           <span>{selectedIds.size} selected</span>
           <button type="button" disabled={selectedIds.size === 0} onClick={duplicateSelection}>Duplicate</button>
           <button type="button" disabled={selectedIds.size === 0} onClick={deleteSelection}>Delete</button>
+          <button type="button" disabled={!canGroup} onClick={groupSelection}>Group</button>
+          <button type="button" disabled={!canUngroup} onClick={ungroupSelection}>Ungroup</button>
         </div>
 
         <div className="tool-group" role="group" aria-label="Zoom">
@@ -634,7 +682,7 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
                       ) : (
                         <Rect width={dimensions.width} height={dimensions.height} fill={shape.fill} stroke={selected ? "#ef8c45" : shape.stroke} strokeWidth={selected ? 3 : 2} cornerRadius={12} />
                       )}
-                      {selected && (
+                      {selected && selectedIds.size === 1 && (
                         <Circle
                           x={dimensions.width}
                           y={dimensions.height}
@@ -677,7 +725,7 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
                         shadowOpacity={0.08}
                       />
                       <Text width={dimensions.width} height={dimensions.height} text={node.label} align="center" verticalAlign="middle" fontSize={17} fontFamily="Inter, sans-serif" fill="#163b3a" />
-                      {selected && (
+                      {selected && selectedIds.size === 1 && (
                         <Circle
                           x={dimensions.width}
                           y={dimensions.height}
@@ -712,6 +760,7 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
               size={sizeFor(card)}
               cameraScale={camera.scale}
               selected={selectedIds.has(card.id)}
+              resizable={selectedIds.size === 1}
               onSelect={(additive) => selectObject(card.id, additive)}
               onMove={(position) => previewPosition(card.id, position)}
               onMoveEnd={(position) => commitPosition(card.id, position)}
@@ -744,6 +793,8 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
                     globalCompositeOperation="multiply"
                     stroke={selectedIds.has(stroke.id) ? "#ef8c45" : undefined}
                     strokeWidth={selectedIds.has(stroke.id) ? 2 / camera.scale : 0}
+                    x={positionFor(stroke).x - stroke.x}
+                    y={positionFor(stroke).y - stroke.y}
                   />
                 ))}
                 {visibleStrokes.filter((stroke) => stroke.tool === "pen").map((stroke) => (
@@ -753,6 +804,8 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
                     fill={stroke.color}
                     stroke={selectedIds.has(stroke.id) ? "#ef8c45" : undefined}
                     strokeWidth={selectedIds.has(stroke.id) ? 2 / camera.scale : 0}
+                    x={positionFor(stroke).x - stroke.x}
+                    y={positionFor(stroke).y - stroke.y}
                   />
                 ))}
                 {lassoPoints.length > 1 && (

@@ -77,6 +77,8 @@ A short decision record contains the exact engine version, supported device/brow
 
 **Progress — 2026-09-15 (canvas viewport controls):** Canvas wheel handling now uses a non-passive native listener at the viewport boundary. A plain wheel pans only the canvas camera, while Ctrl/Command+wheel prevents browser zoom and performs clamped, pointer-anchored canvas zoom. The toolbar adds an accessible full-screen toggle using the browser Fullscreen API, with a viewport-filling fallback and Escape handling where element fullscreen is unavailable. Camera math has focused coverage; twenty-two tests, type checking, and a production build pass. Physical mouse/trackpad and browser fullscreen smoke checks remain open.
 
+**Progress — 2026-09-15 (grouping):** Mixed learning objects can now be grouped and ungrouped through atomic document commands. Selecting one member expands to the complete group; dragging a member translates every grouped card, shape, node, and ink stroke while semantic connectors redraw from their endpoints. Bound connectors are included automatically, and duplicated groups receive fresh group identities rather than remaining attached to the originals. Browser checks verified Shift selection, group expansion from one React-card member, and ungrouping. Seventeen focused tests pass. Multi-object scaling/rotation and nested groups remain intentionally unsupported.
+
 **Work**
 
 - Set up the frontend, local database, schema package, formatter/type checks, and minimal tests.

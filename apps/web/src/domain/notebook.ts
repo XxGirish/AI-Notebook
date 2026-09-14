@@ -8,6 +8,7 @@ export type PointSample = {
 type ObjectBase = {
   id: string;
   revision: number;
+  groupId?: string;
   x: number;
   y: number;
   width: number;

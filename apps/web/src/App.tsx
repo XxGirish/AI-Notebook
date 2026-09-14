@@ -180,7 +180,7 @@ export function App() {
 
         <aside className="experiment-banner">
           <strong>Editable learning objects are live.</strong>
-          <span>Create notes and shapes, resize them, connect selected shapes, and keep every committed change locally.</span>
+          <span>Create, resize, connect, group, and ungroup mixed learning objects while every committed change stays local.</span>
         </aside>
 
         {activePage && (
