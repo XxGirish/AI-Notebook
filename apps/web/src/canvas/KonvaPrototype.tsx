@@ -732,7 +732,8 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
 
   return (
     <section className="prototype" ref={prototypeRef} data-fullscreen-fallback={fullscreenFallback || undefined}>
-      <div className="prototype-toolbar" aria-label="Canvas tools">
+      <div className="prototype-controls">
+        <div className="prototype-toolbar" aria-label="Canvas tools">
         <div className="tool-group" role="group" aria-label="Drawing tools">
           {([
             ["select", "Select", "V"],
@@ -812,22 +813,23 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
             {isFullscreen ? "Exit full screen" : "Full screen"}
           </button>
         </div>
-      </div>
+        </div>
 
-      {(aiDraft || aiDraftError) && (
-        <aside className="ai-draft" aria-label="AI draft preview">
-          <div>
-            <strong>{aiDraft ? "Mock lesson draft" : "Draft unavailable"}</strong>
-            <span>{aiDraft ? `${aiDraft.inserts.length} editable objects prepared locally. No network request was made.` : aiDraftError}</span>
-          </div>
-          {aiDraft && (
-            <div className="ai-draft__actions">
-              <button type="button" onClick={() => { setAiDraft(undefined); setAiDraftError(undefined); }}>Discard</button>
-              <button type="button" onClick={acceptAiDraft}>Add to page</button>
+        {(aiDraft || aiDraftError) && (
+          <aside className="ai-draft" aria-label="AI draft preview">
+            <div>
+              <strong>{aiDraft ? "Mock lesson draft" : "Draft unavailable"}</strong>
+              <span>{aiDraft ? `${aiDraft.inserts.length} editable objects prepared locally. No network request was made.` : aiDraftError}</span>
             </div>
-          )}
-        </aside>
-      )}
+            {aiDraft && (
+              <div className="ai-draft__actions">
+                <button type="button" onClick={() => { setAiDraft(undefined); setAiDraftError(undefined); }}>Discard</button>
+                <button type="button" onClick={acceptAiDraft}>Add to page</button>
+              </div>
+            )}
+          </aside>
+        )}
+      </div>
 
       <div className="canvas-viewport" ref={rootRef} data-tool={tool}>
         {size.width > 0 && size.height > 0 && (

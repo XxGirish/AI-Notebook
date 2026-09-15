@@ -188,6 +188,7 @@ button { font: inherit; }
 }
 
 .prototype { min-height: 0; display: grid; grid-template-rows: auto minmax(500px, 1fr); gap: 10px; }
+.prototype-controls { display: grid; gap: 10px; }
 .prototype:fullscreen, .prototype[data-fullscreen-fallback="true"] {
   width: 100vw;
   height: 100vh;
