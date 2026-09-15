@@ -115,7 +115,7 @@ button { font: inherit; }
 .writer-state { display: grid; gap: 7px; padding: 10px 16px; border-top: 1px solid #ded9ce; color: #526568; background: rgba(255, 255, 255, 0.42); font-size: 0.72rem; }
 .writer-state[data-state="reader"], .writer-state[data-state="unsupported"] { color: #864d2b; background: #fff4e3; }
 .writer-state button { min-height: 32px; border: 1px solid #d59f70; border-radius: 7px; color: #754021; background: white; cursor: pointer; font-size: 0.72rem; font-weight: 750; }
-.notebook-transfer { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 10px 16px; border-top: 1px solid #ded9ce; }
+.notebook-transfer { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 10px 16px; border-top: 1px solid #ded9ce; }
 .notebook-transfer button { min-height: 34px; border: 1px solid #c8c2b5; border-radius: 8px; color: #3e5c5a; background: rgba(255, 255, 255, 0.72); cursor: pointer; font-size: 0.75rem; font-weight: 700; }
 .notebook-transfer button:disabled { cursor: not-allowed; opacity: 0.5; }
 .notebook-transfer span { grid-column: 1 / -1; overflow-wrap: anywhere; color: #657376; font-size: 0.7rem; line-height: 1.35; }

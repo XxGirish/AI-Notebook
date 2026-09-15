@@ -17,11 +17,12 @@ type Props = {
   onDelete: (pageId: string) => void;
   onRestore: () => void;
   onExport: () => void;
+  onExportPage: () => void;
   onImport: (file: File) => void;
   onTakeOver: () => void;
 };
 
-export function PageSidebar({ pages, activePageId, saveStatus, saveError, storageSummary, canRestore, transferStatus, writerStatus, onCreate, onOpen, onRename, onDelete, onRestore, onExport, onImport, onTakeOver }: Props) {
+export function PageSidebar({ pages, activePageId, saveStatus, saveError, storageSummary, canRestore, transferStatus, writerStatus, onCreate, onOpen, onRename, onDelete, onRestore, onExport, onExportPage, onImport, onTakeOver }: Props) {
   const [renamingId, setRenamingId] = useState<string>();
   const [deletingId, setDeletingId] = useState<string>();
   const [draftTitle, setDraftTitle] = useState("");
@@ -118,7 +119,8 @@ export function PageSidebar({ pages, activePageId, saveStatus, saveError, storag
       </div>
 
       <div className="notebook-transfer" aria-label="Notebook transfer">
-        <button type="button" onClick={onExport} disabled={saveStatus !== "saved"}>Export</button>
+        <button type="button" onClick={onExport} disabled={saveStatus !== "saved"}>Archive</button>
+        <button type="button" onClick={onExportPage} disabled={!activePageId}>Page SVG</button>
         <button type="button" onClick={() => archiveInputRef.current?.click()} disabled={saveStatus !== "saved" || writerStatus !== "writer"}>Import</button>
         <input
           ref={archiveInputRef}

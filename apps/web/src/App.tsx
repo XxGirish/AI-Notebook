@@ -4,6 +4,7 @@ import { PageSidebar } from "./components/PageSidebar";
 import type { NotebookObject } from "./domain/notebook";
 import { createNotebookPage, pageFromFixture, renamePage, replacePageObjects, type NotebookPage } from "./domain/pages";
 import { phaseZeroFixture } from "./fixtures/phaseZeroFixture";
+import { createStaticPageSvg, safeExportFilename } from "./export/staticPageExport";
 import { createNotebookArchive, MAX_ARCHIVE_BYTES, NOTEBOOK_ARCHIVE_MIME, readNotebookArchive } from "./persistence/notebookArchive";
 import { cleanupOrphanAssets, deletePage, hasRecoverySnapshot, loadAssets, loadPages, restorePreviousPage, savePage, storeImportedNotebook } from "./persistence/notebookDatabase";
 import { PageWriteConflictError } from "./persistence/pageRecords";
@@ -311,8 +312,10 @@ export function App() {
       const link = document.createElement("a");
       link.href = url;
       link.download = `ai-notebook-${new Date().toISOString().slice(0, 10)}.ainotebook`;
+      document.body.append(link);
       link.click();
-      URL.revokeObjectURL(url);
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
       setTransferStatus(`Exported ${pagesRef.current.length} page${pagesRef.current.length === 1 ? "" : "s"}`);
     } catch (error) {
       setTransferStatus(error instanceof Error ? error.message : "Notebook export failed");
@@ -340,6 +343,28 @@ export function App() {
       setTransferStatus(`Imported ${imported.pages.length} page${imported.pages.length === 1 ? "" : "s"} as copies`);
     } catch (error) {
       setTransferStatus(error instanceof Error ? error.message : "Notebook import failed");
+    }
+  };
+
+  const exportActivePage = async () => {
+    const page = pagesRef.current.find((candidate) => candidate.id === activePageIdRef.current);
+    if (!page) return;
+    setTransferStatus("Rendering static page…");
+    try {
+      const hashes = page.objects.filter((object) => object.kind === "image").map((object) => object.assetHash);
+      const assets = await loadAssets(hashes);
+      const svg = await createStaticPageSvg(page, assets);
+      const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = safeExportFilename(page.title);
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+      setTransferStatus(`Exported “${page.title}” as SVG`);
+    } catch (error) {
+      setTransferStatus(error instanceof Error ? error.message : "Static page export failed");
     }
   };
 
@@ -372,6 +397,7 @@ export function App() {
         onDelete={deleteNotebookPage}
         onRestore={restoreActivePage}
         onExport={() => { void exportNotebook(); }}
+        onExportPage={() => { void exportActivePage(); }}
         onImport={(file) => { void importNotebook(file); }}
         onTakeOver={() => writerLeaseRef.current?.takeOver()}
       />
