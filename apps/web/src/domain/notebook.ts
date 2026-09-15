@@ -15,6 +15,23 @@ type ObjectBase = {
   height: number;
 };
 
+export type GeneratedContentProvenance = {
+  requestId: string;
+  intent: "teach_section" | "explain_selection" | "create_diagram" | "create_equation" | "create_quiz";
+  provider: string;
+  model: string;
+  configurationId: string;
+  proposalSchemaVersion: number;
+  sources: Array<{ id: string; revision: number; contentHash?: string }>;
+};
+
+export type AiTransactionRecord = GeneratedContentProvenance & {
+  transactionId: string;
+  committedAt: number;
+  generatedObjectIds: string[];
+  updatedObjectIds: string[];
+};
+
 export type StrokeObject = ObjectBase & {
   kind: "stroke";
   tool: "pen" | "highlighter";
@@ -85,21 +102,28 @@ export type NotebookObject =
   | QuizCardObject;
 
 export type NotebookFixture = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   id: string;
   title: string;
   width: number;
   height: number;
   objects: NotebookObject[];
+  aiTransactions: AiTransactionRecord[];
 };
 
 export function validateFixture(fixture: NotebookFixture): string[] {
   const errors: string[] = [];
   const ids = new Set<string>();
+  const transactionIds = new Set<string>();
 
   for (const object of fixture.objects) {
     if (ids.has(object.id)) errors.push(`Duplicate object id: ${object.id}`);
     ids.add(object.id);
+  }
+
+  for (const transaction of fixture.aiTransactions) {
+    if (transactionIds.has(transaction.transactionId)) errors.push(`Duplicate AI transaction id: ${transaction.transactionId}`);
+    transactionIds.add(transaction.transactionId);
   }
 
   for (const object of fixture.objects) {

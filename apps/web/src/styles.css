@@ -205,6 +205,12 @@ button { font: inherit; }
 }
 .prototype-toolbar span { padding: 0 8px; color: #607075; font-size: 0.82rem; }
 .prototype-toolbar button:disabled { cursor: not-allowed; opacity: 0.45; }
+.ai-draft { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; border: 1px solid #9fbdb8; border-radius: 12px; color: #244d4a; background: #edf7f5; }
+.ai-draft > div:first-child { display: grid; gap: 3px; }
+.ai-draft span { color: #58716f; font-size: 0.78rem; }
+.ai-draft__actions { display: flex; gap: 8px; flex: 0 0 auto; }
+.ai-draft__actions button { min-height: 36px; padding: 7px 12px; border: 1px solid #9bb6b2; border-radius: 8px; color: #315c58; background: white; cursor: pointer; font-weight: 700; }
+.ai-draft__actions button:last-child { border-color: #255f5b; color: white; background: #255f5b; }
 .asset-message { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #536267; font-size: 0.76rem; }
 .tool-group { display: flex; align-items: center; gap: 4px; }
 .tool-group + .tool-group { padding-left: 8px; border-left: 1px solid #d8d2c6; }

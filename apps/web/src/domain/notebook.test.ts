@@ -23,11 +23,12 @@ describe("Phase 0 semantic fixture", () => {
 
   it("rejects image objects without a content hash", () => {
     expect(validateFixture({
-      schemaVersion: 1,
+      schemaVersion: 2,
       id: "image-page",
       title: "Images",
       width: 800,
       height: 600,
+      aiTransactions: [],
       objects: [{
         id: "image-1",
         revision: 1,

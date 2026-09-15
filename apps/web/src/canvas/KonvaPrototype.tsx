@@ -3,6 +3,7 @@ import { Arrow, Circle, Ellipse, Group, Layer, Line, Path, Rect, Stage, Text } f
 import type { KonvaEventObject } from "konva/lib/Node";
 import { commitHistory, createHistory, redoHistory, undoHistory } from "../domain/history";
 import type {
+  AiTransactionRecord,
   GraphNodeObject,
   ImageObject,
   NotebookFixture,
@@ -11,7 +12,10 @@ import type {
   ShapeObject,
   StrokeObject,
 } from "../domain/notebook";
+import { applyCanvasBatch, prepareCanvasBatch, transactionRecordFromBatch, type PreparedCanvasBatch } from "../ai/proposalCompiler";
+import { validateCanvasProposal, type SemanticOperationType } from "../ai/proposalSchema";
 import { LearningCard } from "../components/LearningCard";
+import { mockLessonProposal } from "../fixtures/mockLessonProposal";
 import { saveAsset } from "../persistence/notebookDatabase";
 import { isQuotaExceededError } from "../persistence/storageHealth";
 import { CanvasImage } from "./CanvasImage";
@@ -26,7 +30,7 @@ import { wheelDeltaInPixels, wheelZoomScale, zoomCameraAt, type Camera } from ".
 type Props = {
   fixture: NotebookFixture;
   readOnly?: boolean;
-  onObjectsChange?: (objects: NotebookObject[]) => void;
+  onObjectsChange?: (objects: NotebookObject[], aiTransaction?: AiTransactionRecord) => void;
 };
 type Tool = "select" | "lasso" | "pen" | "highlighter" | "eraser" | "rectangle" | "ellipse" | "pan";
 type Position = { x: number; y: number };
@@ -81,6 +85,8 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
   const [lassoPoints, setLassoPoints] = useState<PointSample[]>([]);
   const [draftShape, setDraftShape] = useState<(CanvasBounds & { shape: ShapeObject["shape"] })>();
   const [imageNotice, setImageNotice] = useState<string>();
+  const [aiDraft, setAiDraft] = useState<PreparedCanvasBatch>();
+  const [aiDraftError, setAiDraftError] = useState<string>();
   const [erasingIds, setErasingIds] = useState<Set<string>>(() => new Set());
   const liveStrokeRef = useRef<PointSample[]>([]);
   const lassoPointsRef = useRef<PointSample[]>([]);
@@ -89,6 +95,8 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
   const gestureRef = useRef<Gesture>();
   const animationFrameRef = useRef<number>();
   const lastNotifiedObjectsRef = useRef(fixture.objects);
+  const pendingAiTransactionRef = useRef<AiTransactionRecord>();
+  const committedAiTransactionIdsRef = useRef(new Set(fixture.aiTransactions.map((transaction) => transaction.transactionId)));
 
   const objects = history.present;
   const strokes = objects.filter(isStroke);
@@ -107,7 +115,10 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
   }, []);
 
   useEffect(() => {
-    if (readOnly && tool !== "select" && tool !== "pan") setTool("select");
+    if (readOnly) {
+      if (tool !== "select" && tool !== "pan") setTool("select");
+      setAiDraft(undefined);
+    }
   }, [readOnly, tool]);
 
   useEffect(() => {
@@ -162,7 +173,9 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
   useEffect(() => {
     if (history.present === lastNotifiedObjectsRef.current) return;
     lastNotifiedObjectsRef.current = history.present;
-    onObjectsChange?.(history.present);
+    const transaction = pendingAiTransactionRef.current;
+    pendingAiTransactionRef.current = undefined;
+    onObjectsChange?.(history.present, transaction);
   }, [history.present, onObjectsChange]);
 
   useEffect(() => {
@@ -333,6 +346,73 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
   const canGroup = selectedVisualObjects.length >= 2
     && !(selectedGroupIds.size === 1 && selectedObjects.every((object) => object.groupId && selectedGroupIds.has(object.groupId)));
   const canUngroup = selectedGroupIds.size > 0;
+
+  const prepareMockLesson = () => {
+    if (readOnly || aiDraft) return;
+    setAiDraftError(undefined);
+    try {
+      const operationType: SemanticOperationType = "insert_lesson_section";
+      const requestId = `request-${crypto.randomUUID()}`;
+      const proposal = validateCanvasProposal(mockLessonProposal, {
+        requestId,
+        pageId: fixture.id,
+        permittedOperations: new Set([operationType]),
+        targetObjects: new Map(),
+        maxOperations: 1,
+      });
+      const visualSelection = selectedObjects.filter((object) => object.kind !== "connector");
+      const left = visualSelection.length > 0 ? Math.min(...visualSelection.map((object) => object.x)) : 0;
+      const top = visualSelection.length > 0 ? Math.min(...visualSelection.map((object) => object.y)) : 0;
+      const selectionBounds = visualSelection.length === 0 ? undefined : {
+        x: left,
+        y: top,
+        width: Math.max(...visualSelection.map((object) => object.x + object.width)) - left,
+        height: Math.max(...visualSelection.map((object) => object.y + object.height)) - top,
+      };
+      setAiDraft(prepareCanvasBatch({
+        transactionId: `transaction-${crypto.randomUUID()}`,
+        pageId: fixture.id,
+        existingObjects: objects,
+        proposal,
+        provenance: {
+          requestId,
+          intent: "teach_section",
+          provider: "mock",
+          model: "deterministic-force-fixture",
+          configurationId: "mock-v1",
+          proposalSchemaVersion: proposal.schemaVersion,
+          sources: selectedObjects.map((object) => ({ id: object.id, revision: object.revision })),
+        },
+        selectionBounds,
+        viewportCenter: {
+          x: (size.width / 2 - camera.x) / camera.scale,
+          y: (size.height / 2 - camera.y) / camera.scale,
+        },
+      }));
+    } catch (error) {
+      setAiDraftError(error instanceof Error ? error.message : "The mock proposal could not be prepared.");
+    }
+  };
+
+  const acceptAiDraft = () => {
+    if (!aiDraft || readOnly) return;
+    try {
+      const result = applyCanvasBatch(fixture.id, objects, aiDraft, committedAiTransactionIdsRef.current);
+      if (!result.applied) {
+        setAiDraft(undefined);
+        return;
+      }
+      pendingAiTransactionRef.current = transactionRecordFromBatch(aiDraft);
+      committedAiTransactionIdsRef.current.add(aiDraft.transactionId);
+      setHistory((current) => commitHistory(current, result.objects));
+      setSelectedIds(new Set(aiDraft.generatedObjectIds));
+      setAiDraft(undefined);
+      setAiDraftError(undefined);
+      setTool("select");
+    } catch (error) {
+      setAiDraftError(error instanceof Error ? error.message : "The draft became stale and was not applied.");
+    }
+  };
 
   const groupSelection = () => {
     if (!canGroup) return;
@@ -710,6 +790,10 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
           <button type="button" disabled={readOnly || selectedConnectables.length !== 2} onClick={connectSelection}>Connect</button>
         </div>
 
+        <div className="tool-group" role="group" aria-label="Learning tools">
+          <button type="button" onClick={prepareMockLesson} disabled={readOnly || Boolean(aiDraft)}>Mock lesson</button>
+        </div>
+
         {imageNotice && <span className="asset-message" role="status">{imageNotice}</span>}
 
         <div className="tool-group" role="group" aria-label="Selection actions">
@@ -729,6 +813,21 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
           </button>
         </div>
       </div>
+
+      {(aiDraft || aiDraftError) && (
+        <aside className="ai-draft" aria-label="AI draft preview">
+          <div>
+            <strong>{aiDraft ? "Mock lesson draft" : "Draft unavailable"}</strong>
+            <span>{aiDraft ? `${aiDraft.inserts.length} editable objects prepared locally. No network request was made.` : aiDraftError}</span>
+          </div>
+          {aiDraft && (
+            <div className="ai-draft__actions">
+              <button type="button" onClick={() => { setAiDraft(undefined); setAiDraftError(undefined); }}>Discard</button>
+              <button type="button" onClick={acceptAiDraft}>Add to page</button>
+            </div>
+          )}
+        </aside>
+      )}
 
       <div className="canvas-viewport" ref={rootRef} data-tool={tool}>
         {size.width > 0 && size.height > 0 && (

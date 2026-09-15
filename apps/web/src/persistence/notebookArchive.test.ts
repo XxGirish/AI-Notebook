@@ -13,6 +13,12 @@ async function assetRecord(bytes: Uint8Array, mimeType = "image/png"): Promise<A
   return { hash, blob: new Blob([source], { type: mimeType }), mimeType, size: bytes.length, createdAt: 10 };
 }
 
+async function sha256(bytes: Uint8Array): Promise<string> {
+  const source = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  const digest = await crypto.subtle.digest("SHA-256", source);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 describe(".ainotebook archives", () => {
   it("round-trips pages and assets while remapping every relationship id", async () => {
     const asset = await assetRecord(new Uint8Array([137, 80, 78, 71, 1, 2, 3]));
@@ -31,6 +37,19 @@ describe(".ainotebook archives", () => {
       height: 180,
       groupId: "group-original",
     } satisfies ImageObject);
+    page.aiTransactions.push({
+      transactionId: "transaction-original",
+      requestId: "request-original",
+      intent: "create_diagram",
+      provider: "mock",
+      model: "fixture-v1",
+      configurationId: "mock-v1",
+      proposalSchemaVersion: 1,
+      sources: [{ id: "node-force", revision: 1 }, { id: "deleted-source", revision: 2, contentHash: "b".repeat(64) }],
+      committedAt: 90,
+      generatedObjectIds: ["node-acceleration"],
+      updatedObjectIds: [],
+    });
 
     const archive = await createNotebookArchive([page], [asset], "2026-09-15T00:00:00.000Z");
     let nextId = 0;
@@ -54,6 +73,12 @@ describe(".ainotebook archives", () => {
     const importedQuiz = imported.pages[0].objects.find((object) => object.kind === "quiz-card");
     expect(importedQuiz?.options.some((option) => option.id === importedQuiz.correctOptionId)).toBe(true);
     expect(importedQuiz?.correctOptionId).not.toBe("option-half");
+
+    const importedTransaction = imported.pages[0].aiTransactions[0];
+    expect(importedTransaction.transactionId).not.toBe("transaction-original");
+    expect(importedTransaction.sources[0].id).toBe(importedForce?.id);
+    expect(importedTransaction.sources[1].id).not.toBe("deleted-source");
+    expect(importedTransaction.generatedObjectIds).toEqual([importedAcceleration?.id]);
   });
 
   it("rejects a page whose bytes no longer match its manifest hash", async () => {
@@ -91,5 +116,23 @@ describe(".ainotebook archives", () => {
 
   it("rejects corrupt input without producing imported records", async () => {
     await expect(readNotebookArchive(new Uint8Array([1, 2, 3, 4]))).rejects.toThrow(/corrupt or unsupported/);
+  });
+
+  it("imports a version-1 archive and migrates it to an empty AI transaction history", async () => {
+    const current = pageFromFixture(phaseZeroFixture, 100);
+    const { aiTransactions: _transactions, ...withoutTransactions } = current;
+    const legacyPage = { ...withoutTransactions, schemaVersion: 1 };
+    const pageBytes = strToU8(JSON.stringify(legacyPage));
+    const manifest = {
+      format: "ai-notebook",
+      archiveVersion: 1,
+      documentSchemaVersion: 1,
+      exportedAt: "2026-09-15T00:00:00.000Z",
+      pages: [{ id: legacyPage.id, title: legacyPage.title, path: "pages/0000.json", sha256: await sha256(pageBytes) }],
+      assets: [],
+    };
+    const archive = zipSync({ "manifest.json": strToU8(JSON.stringify(manifest)), "pages/0000.json": pageBytes });
+    const imported = await readNotebookArchive(archive, 1_000, () => crypto.randomUUID());
+    expect(imported.pages[0]).toMatchObject({ schemaVersion: 2, aiTransactions: [] });
   });
 });

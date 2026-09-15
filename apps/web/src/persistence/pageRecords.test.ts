@@ -14,12 +14,12 @@ describe("persisted page records", () => {
       updatedAt: 20,
     });
 
-    expect(migrated).toMatchObject({ schemaVersion: 1, title: "Legacy notes", createdAt: 10, updatedAt: 20 });
+    expect(migrated).toMatchObject({ schemaVersion: 2, title: "Legacy notes", createdAt: 10, updatedAt: 20, aiTransactions: [] });
     expect(migrated.objects[0].revision).toBe(1);
   });
 
   it("rejects records from a newer document schema", () => {
-    expect(() => migratePersistedPage({ schemaVersion: 2, id: "future", objects: [] })).toThrow(/newer/);
+    expect(() => migratePersistedPage({ schemaVersion: 3, id: "future", objects: [] })).toThrow(/newer/);
   });
 
   it("swaps recovery and current pages so a restore can be undone", () => {

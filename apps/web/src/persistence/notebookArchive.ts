@@ -1,9 +1,9 @@
 import { strFromU8, strToU8, unzipSync, zipSync, type Unzipped } from "fflate";
-import type { NotebookObject } from "../domain/notebook";
+import type { AiTransactionRecord, NotebookObject } from "../domain/notebook";
 import { validateFixture } from "../domain/notebook";
 import type { NotebookPage } from "../domain/pages";
 import type { AssetRecord } from "./notebookDatabase";
-import { CURRENT_PAGE_SCHEMA_VERSION } from "./pageRecords";
+import { CURRENT_PAGE_SCHEMA_VERSION, migratePersistedPage } from "./pageRecords";
 
 export const NOTEBOOK_ARCHIVE_VERSION = 1;
 export const NOTEBOOK_ARCHIVE_MIME = "application/vnd.ai-notebook+zip";
@@ -20,7 +20,7 @@ type ManifestAsset = { hash: string; path: string; mimeType: string; size: numbe
 type NotebookArchiveManifest = {
   format: "ai-notebook";
   archiveVersion: 1;
-  documentSchemaVersion: number;
+  documentSchemaVersion: 1 | 2;
   exportedAt: string;
   pages: ManifestPage[];
   assets: ManifestAsset[];
@@ -133,16 +133,60 @@ function validateObject(value: unknown): NotebookObject {
   return structuredClone(value) as NotebookObject;
 }
 
-function validatePage(value: unknown): NotebookPage {
+const AI_INTENTS = new Set(["teach_section", "explain_selection", "create_diagram", "create_equation", "create_quiz"]);
+
+function validateAiTransaction(value: unknown): AiTransactionRecord {
+  if (!isRecord(value)) fail("a page contains a non-object AI transaction");
+  assertOnlyKeys(value, ["transactionId", "requestId", "intent", "provider", "model", "configurationId", "proposalSchemaVersion", "sources", "committedAt", "generatedObjectIds", "updatedObjectIds"], "AI transaction");
+  if (!isString(value.transactionId, 200) || !isString(value.requestId, 200) || !AI_INTENTS.has(String(value.intent)) || !isString(value.provider, 200) || !isString(value.model, 200) || !isString(value.configurationId, 200)) {
+    fail("an AI transaction has invalid identity metadata");
+  }
+  if (!Number.isInteger(value.proposalSchemaVersion) || (value.proposalSchemaVersion as number) < 1 || !isFiniteNumber(value.committedAt)) fail(`AI transaction ${value.transactionId} has an invalid version or timestamp`);
+  if (!Array.isArray(value.sources) || value.sources.length > 200 || !Array.isArray(value.generatedObjectIds) || value.generatedObjectIds.length > 1_000 || !Array.isArray(value.updatedObjectIds) || value.updatedObjectIds.length > 1_000) {
+    fail(`AI transaction ${value.transactionId} has too many or invalid references`);
+  }
+  const sources = value.sources.map((source) => {
+    if (!isRecord(source) || !isString(source.id, 200) || !Number.isInteger(source.revision) || (source.revision as number) < 1 || (source.contentHash !== undefined && !isHash(source.contentHash))) {
+      fail(`AI transaction ${value.transactionId} has an invalid source`);
+    }
+    assertOnlyKeys(source, ["id", "revision", "contentHash"], `AI transaction ${value.transactionId} source`);
+    return { id: source.id, revision: source.revision as number, contentHash: source.contentHash as string | undefined };
+  });
+  const readIds = (ids: unknown[], label: string) => {
+    if (!ids.every((id) => isString(id, 200)) || new Set(ids).size !== ids.length) fail(`AI transaction ${value.transactionId} has invalid ${label}`);
+    return ids as string[];
+  };
+  return {
+    transactionId: value.transactionId,
+    requestId: value.requestId,
+    intent: value.intent as AiTransactionRecord["intent"],
+    provider: value.provider,
+    model: value.model,
+    configurationId: value.configurationId,
+    proposalSchemaVersion: value.proposalSchemaVersion as number,
+    sources,
+    committedAt: value.committedAt,
+    generatedObjectIds: readIds(value.generatedObjectIds, "generated object IDs"),
+    updatedObjectIds: readIds(value.updatedObjectIds, "updated object IDs"),
+  };
+}
+
+function validatePage(value: unknown, expectedSchemaVersion?: number): NotebookPage {
   if (!isRecord(value)) fail("a page record is not an object");
-  assertOnlyKeys(value, ["schemaVersion", "id", "title", "width", "height", "objects", "createdAt", "updatedAt"], "page record");
-  if (value.schemaVersion !== CURRENT_PAGE_SCHEMA_VERSION) fail("a page uses an unsupported document schema");
+  if (!Number.isInteger(value.schemaVersion) || (value.schemaVersion as number) < 1 || (value.schemaVersion as number) > CURRENT_PAGE_SCHEMA_VERSION || (expectedSchemaVersion !== undefined && value.schemaVersion !== expectedSchemaVersion)) fail("a page uses an unsupported document schema");
+  const pageSchemaVersion = value.schemaVersion as number;
+  assertOnlyKeys(value, ["schemaVersion", "id", "title", "width", "height", "objects", "createdAt", "updatedAt", ...(pageSchemaVersion >= 2 ? ["aiTransactions"] : [])], "page record");
   if (!isString(value.id, 200) || !isString(value.title, 10_000)) fail("a page has an invalid id or title");
   if (!isFiniteNumber(value.width) || value.width <= 0 || !isFiniteNumber(value.height) || value.height <= 0) fail(`page ${value.id} has invalid dimensions`);
   if (!isFiniteNumber(value.createdAt) || !isFiniteNumber(value.updatedAt)) fail(`page ${value.id} has invalid timestamps`);
   if (!Array.isArray(value.objects) || value.objects.length > MAX_OBJECTS_PER_PAGE) fail(`page ${value.id} has too many objects`);
 
-  const page = { ...value, objects: value.objects.map(validateObject) } as NotebookPage;
+  if (pageSchemaVersion >= 2 && (!Array.isArray(value.aiTransactions) || value.aiTransactions.length > 10_000)) fail(`page ${value.id} has an invalid AI transaction list`);
+  const page = migratePersistedPage({
+    ...value,
+    objects: value.objects.map(validateObject),
+    ...(pageSchemaVersion >= 2 ? { aiTransactions: (value.aiTransactions as unknown[]).map(validateAiTransaction) } : {}),
+  });
   const errors = validateFixture(page);
   if (errors.length > 0) fail(errors[0]);
   return page;
@@ -151,7 +195,7 @@ function validatePage(value: unknown): NotebookPage {
 function parseManifest(value: unknown): NotebookArchiveManifest {
   if (!isRecord(value) || value.format !== "ai-notebook" || value.archiveVersion !== NOTEBOOK_ARCHIVE_VERSION) fail("the manifest version is unsupported");
   assertOnlyKeys(value, ["format", "archiveVersion", "documentSchemaVersion", "exportedAt", "pages", "assets"], "manifest");
-  if (value.documentSchemaVersion !== CURRENT_PAGE_SCHEMA_VERSION) fail("the document schema version is unsupported");
+  if (!Number.isInteger(value.documentSchemaVersion) || (value.documentSchemaVersion as number) < 1 || (value.documentSchemaVersion as number) > CURRENT_PAGE_SCHEMA_VERSION) fail("the document schema version is unsupported");
   if (typeof value.exportedAt !== "string" || Number.isNaN(Date.parse(value.exportedAt))) fail("the export timestamp is invalid");
   if (!Array.isArray(value.pages) || value.pages.length === 0 || value.pages.length > MAX_PAGES) fail("the page list is invalid");
   if (!Array.isArray(value.assets)) fail("the asset list is invalid");
@@ -176,7 +220,7 @@ function parseManifest(value: unknown): NotebookArchiveManifest {
   return {
     format: "ai-notebook",
     archiveVersion: NOTEBOOK_ARCHIVE_VERSION,
-    documentSchemaVersion: CURRENT_PAGE_SCHEMA_VERSION,
+    documentSchemaVersion: value.documentSchemaVersion as 1 | 2,
     exportedAt: value.exportedAt,
     pages,
     assets,
@@ -200,7 +244,7 @@ function allocateId(prefix: string, used: Set<string>, idFactory: () => string):
 
 export async function createNotebookArchive(pages: NotebookPage[], assets: AssetRecord[], exportedAt = new Date().toISOString()): Promise<Uint8Array> {
   if (pages.length === 0 || pages.length > MAX_PAGES) fail("there must be between 1 and 500 pages");
-  const validatedPages = pages.map(validatePage);
+  const validatedPages = pages.map((page) => validatePage(page));
   if (new Set(validatedPages.map((page) => page.id)).size !== validatedPages.length) fail("page ids must be unique");
 
   const requestedHashes = referencedAssetHashes(validatedPages);
@@ -284,7 +328,7 @@ export async function readNotebookArchive(
   for (const pageEntry of manifest.pages) {
     const pageBytes = files[pageEntry.path];
     if (!pageBytes || pageBytes.length > MAX_PAGE_BYTES || await sha256(pageBytes) !== pageEntry.sha256) fail(`page ${pageEntry.title} failed integrity validation`);
-    const page = validatePage(parseJson(pageBytes, pageEntry.path));
+    const page = validatePage(parseJson(pageBytes, pageEntry.path), manifest.documentSchemaVersion);
     if (page.id !== pageEntry.id || page.title !== pageEntry.title) fail(`page ${pageEntry.title} does not match its manifest entry`);
     sourcePages.push(page);
   }
@@ -315,6 +359,7 @@ export async function readNotebookArchive(
     const usedObjectIds = new Set<string>();
     const usedGroupIds = new Set<string>();
     const usedOptionIds = new Set<string>();
+    const usedTransactionIds = new Set<string>();
     const objectIds = new Map(page.objects.map((object) => [object.id, allocateId("object", usedObjectIds, idFactory)]));
     const groupIds = new Map([...new Set(page.objects.flatMap((object) => object.groupId ? [object.groupId] : []))].map((groupId) => [groupId, allocateId("group", usedGroupIds, idFactory)]));
     const objects = page.objects.map((object): NotebookObject => {
@@ -331,10 +376,26 @@ export async function readNotebookArchive(
       }
       return { ...structuredClone(object), ...remappedBase } as NotebookObject;
     });
+    const historicalObjectIds = new Map<string, string>();
+    const remapObjectReference = (id: string) => objectIds.get(id) ?? (() => {
+      const existing = historicalObjectIds.get(id);
+      if (existing) return existing;
+      const allocated = allocateId("historical-object", usedObjectIds, idFactory);
+      historicalObjectIds.set(id, allocated);
+      return allocated;
+    })();
+    const aiTransactions = page.aiTransactions.map((transaction): AiTransactionRecord => ({
+      ...structuredClone(transaction),
+      transactionId: allocateId("transaction", usedTransactionIds, idFactory),
+      sources: transaction.sources.map((source) => ({ ...source, id: remapObjectReference(source.id) })),
+      generatedObjectIds: transaction.generatedObjectIds.map(remapObjectReference),
+      updatedObjectIds: transaction.updatedObjectIds.map(remapObjectReference),
+    }));
     return {
       ...page,
       id: allocateId("page", usedPageIds, idFactory),
       objects,
+      aiTransactions,
       createdAt: now + pageIndex,
       updatedAt: now + pageIndex,
     };

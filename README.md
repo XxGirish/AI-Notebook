@@ -4,7 +4,7 @@ AI Notebook is a local-first spatial learning notebook for writing, drawing, edi
 
 The project is currently building on the selected **Konva hybrid** architecture: Konva + react-konva + perfect-freehand for ink and spatial graphics, with accessible React components for learning cards.
 
-The current editor foundation includes a persistent page sidebar with create/open/rename/confirmed-delete actions backed by Dexie/IndexedDB, schema migration and reversible prior-version recovery, a world-coordinate camera with canvas-only Ctrl/Command+wheel zoom and a full-screen mode, pen/highlighter/eraser and navigation tools, editable text notes, drag-to-size shapes, bound connectors, mixed-object grouping, and content-hashed image insertion with separately stored binary assets. Learning objects support movement, resizing, lasso/additive selection, relationship-safe duplication/deletion, and shared undo/redo. Versioned `.ainotebook` archives transfer all pages and referenced assets with integrity validation and import-as-copy ID remapping. An exclusive Web Lock permits one writable tab, supports explicit takeover, and is backed by transactional stale-revision checks. The sidebar reports origin storage use, quota failures remain visibly unsaved, and idle cleanup removes only assets unreferenced by both current pages and recovery snapshots. A build-generated service worker caches the complete application shell for offline reopening and holds new versions until notebook persistence is safe and the user requests a reload. Static export, richer text tools, multi-object transforms, performance, and physical-device validation still require implementation.
+The current editor foundation includes a persistent page sidebar with create/open/rename/confirmed-delete actions backed by Dexie/IndexedDB, schema migration and reversible prior-version recovery, a world-coordinate camera with canvas-only Ctrl/Command+wheel zoom and a full-screen mode, pen/highlighter/eraser and navigation tools, editable text notes, drag-to-size shapes, bound connectors, mixed-object grouping, and content-hashed image insertion with separately stored binary assets. Learning objects support movement, resizing, lasso/additive selection, relationship-safe duplication/deletion, and shared undo/redo. Versioned `.ainotebook` archives transfer pages, assets, and AI provenance with integrity validation and import-as-copy ID remapping; active pages also export as document-driven SVGs that include off-screen content. An exclusive Web Lock permits one writable tab, supports explicit takeover, and is backed by transactional stale-revision checks. The sidebar reports origin storage use, quota failures remain visibly unsaved, and idle cleanup removes only assets unreferenced by both current pages and recovery snapshots. A build-generated service worker caches the complete application shell for offline reopening and holds new versions until notebook persistence is safe and the user requests a reload. A deterministic network-free mock lesson now exercises strict semantic proposal validation, local Dagre layout, preview/discard, atomic commit, persistence, and undo/redo before a live provider is connected. Richer text tools, multi-object transforms, performance, and physical-device validation still require implementation.
 
 ## Run locally
 
@@ -30,8 +30,10 @@ npm run build
 ```text
 apps/web/src/domain/       Engine-independent notebook records, validation, and history
 apps/web/src/fixtures/     Deterministic comparison input
+apps/web/src/ai/           Semantic proposal schemas, validation, layout, and atomic batches
 apps/web/src/canvas/       Konva rendering and ink/input helpers
 apps/web/src/components/   Accessible HTML learning cards
+apps/web/src/export/       Document-driven static page export
 docs/experiments/          Evidence, limitations, and implementation gates
 ```
 

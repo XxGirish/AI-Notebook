@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { KonvaPrototype } from "./canvas/KonvaPrototype";
 import { PageSidebar } from "./components/PageSidebar";
-import type { NotebookObject } from "./domain/notebook";
+import type { AiTransactionRecord, NotebookObject } from "./domain/notebook";
 import { createNotebookPage, pageFromFixture, renamePage, replacePageObjects, type NotebookPage } from "./domain/pages";
 import { phaseZeroFixture } from "./fixtures/phaseZeroFixture";
 import { createStaticPageSvg, safeExportFilename } from "./export/staticPageExport";
@@ -260,11 +260,14 @@ export function App() {
     );
   };
 
-  const updateActivePageObjects = useCallback((objects: NotebookObject[]) => {
+  const updateActivePageObjects = useCallback((objects: NotebookObject[], aiTransaction?: AiTransactionRecord) => {
     if (writerStatus !== "writer") return;
     const current = pagesRef.current.find((page) => page.id === activePageId);
     if (!current) return;
-    const updated = replacePageObjects(current, objects);
+    const withObjects = replacePageObjects(current, objects);
+    const updated = aiTransaction && !current.aiTransactions.some((transaction) => transaction.transactionId === aiTransaction.transactionId)
+      ? { ...withObjects, aiTransactions: [...current.aiTransactions, aiTransaction] }
+      : withObjects;
     replacePages(pagesRef.current.map((page) => page.id === activePageId ? updated : page));
     persist(updated, current.updatedAt);
   }, [activePageId, writerStatus]);
