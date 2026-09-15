@@ -164,4 +164,8 @@ Test physical desktop/pen hardware, iPad/Pencil Safari, and Android stylus Chrom
 
 Keep this file at the project root as `AGENTS.md`. Codex discovers project instruction files at session startup; after changing it, use a new session in this project to load the updated guidance. It is project-scoped, not a global rule for unrelated projects. Keep it below the default 32 KiB combined project-instruction budget, leaving room for more specific instructions.
 
+## Implementation explanations
+
+After every implementation milestone, give the user a plain-language learning-oriented explanation instead of only a change summary. Explain the architectural purpose, important functions and libraries, the end-to-end data flow, safety and data-integrity boundaries, tests performed, known limitations, and the next logical step. Include small examples when they clarify the design. Clearly distinguish implemented and verified behavior from planned or unverified behavior so the user can understand and evaluate the build process rather than follow it blindly.
+
 Loading reference: [OpenAI's AGENTS.md documentation](https://learn.chatgpt.com/docs/agent-configuration/agents-md).
