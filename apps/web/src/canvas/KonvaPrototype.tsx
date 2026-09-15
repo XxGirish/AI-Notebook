@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { Arrow, Circle, Ellipse, Group, Layer, Line, Path, Rect, Stage, Text } from "react-konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import { commitHistory, createHistory, redoHistory, undoHistory } from "../domain/history";
 import type {
   GraphNodeObject,
+  ImageObject,
   NotebookFixture,
   NotebookObject,
   PointSample,
@@ -11,6 +12,8 @@ import type {
   StrokeObject,
 } from "../domain/notebook";
 import { LearningCard } from "../components/LearningCard";
+import { saveAsset } from "../persistence/notebookDatabase";
+import { CanvasImage } from "./CanvasImage";
 import { getStrokePath } from "./strokePath";
 import { expandGroupedIds, groupObjects, translateObjectGroup, ungroupObjects } from "./groupMath";
 import { objectIntersectsPolygon } from "./selectionMath";
@@ -38,10 +41,28 @@ type Gesture = {
 const isStroke = (object: NotebookObject): object is StrokeObject => object.kind === "stroke";
 const isGraphNode = (object: NotebookObject): object is GraphNodeObject => object.kind === "graph-node";
 const isShape = (object: NotebookObject): object is ShapeObject => object.kind === "shape";
+const isImage = (object: NotebookObject): object is ImageObject => object.kind === "image";
+const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
+
+const readImageDimensions = (blob: Blob) => new Promise<Size>((resolve, reject) => {
+  const url = URL.createObjectURL(blob);
+  const image = new Image();
+  image.onload = () => {
+    URL.revokeObjectURL(url);
+    resolve({ width: image.naturalWidth, height: image.naturalHeight });
+  };
+  image.onerror = () => {
+    URL.revokeObjectURL(url);
+    reject(new Error("The selected image could not be decoded."));
+  };
+  image.src = url;
+});
 
 export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
   const prototypeRef = useRef<HTMLElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const size = useElementSize(rootRef);
   const [tool, setTool] = useState<Tool>("select");
   const [history, setHistory] = useState(() => createHistory(fixture.objects));
@@ -57,6 +78,7 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
   const [liveStroke, setLiveStroke] = useState<PointSample[]>([]);
   const [lassoPoints, setLassoPoints] = useState<PointSample[]>([]);
   const [draftShape, setDraftShape] = useState<(CanvasBounds & { shape: ShapeObject["shape"] })>();
+  const [imageNotice, setImageNotice] = useState<string>();
   const [erasingIds, setErasingIds] = useState<Set<string>>(() => new Set());
   const liveStrokeRef = useRef<PointSample[]>([]);
   const lassoPointsRef = useRef<PointSample[]>([]);
@@ -70,11 +92,12 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
   const strokes = objects.filter(isStroke);
   const nodes = objects.filter(isGraphNode);
   const shapes = objects.filter(isShape);
+  const images = objects.filter(isImage);
   const connectors = objects.filter((object) => object.kind === "connector");
   const cards = objects.filter(
     (object) => object.kind === "text-card" || object.kind === "equation-card" || object.kind === "quiz-card",
   );
-  const connectables = useMemo(() => [...nodes, ...shapes], [nodes, shapes]);
+  const connectables = useMemo(() => [...nodes, ...shapes, ...images], [nodes, shapes, images]);
   const connectableById = useMemo(() => new Map(connectables.map((object) => [object.id, object])), [connectables]);
 
   useEffect(() => () => {
@@ -323,6 +346,46 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
     commitObjects((current) => [...current, object]);
     setSelectedIds(new Set([object.id]));
     setTool("select");
+  };
+
+  const insertImage = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
+      setImageNotice("Choose a PNG, JPEG, WebP, or GIF image.");
+      return;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      setImageNotice("Images must be 12 MB or smaller.");
+      return;
+    }
+
+    setImageNotice("Importing image…");
+    try {
+      const [asset, naturalSize] = await Promise.all([saveAsset(file), readImageDimensions(file)]);
+      const scale = Math.min(1, 480 / naturalSize.width, 360 / naturalSize.height);
+      const dimensions = {
+        width: Math.max(48, naturalSize.width * scale),
+        height: Math.max(48, naturalSize.height * scale),
+      };
+      const object: ImageObject = {
+        id: `image-${crypto.randomUUID()}`,
+        revision: 1,
+        kind: "image",
+        ...insertionPoint(dimensions.width, dimensions.height),
+        ...dimensions,
+        assetHash: asset.hash,
+        mimeType: asset.mimeType,
+        name: file.name,
+      };
+      commitObjects((current) => [...current, object]);
+      setSelectedIds(new Set([object.id]));
+      setTool("select");
+      setImageNotice(`${file.name} added`);
+    } catch {
+      setImageNotice("The image could not be imported.");
+    }
   };
 
   const selectedConnectables = connectables.filter((object) => selectedIds.has(object.id));
@@ -611,8 +674,19 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
 
         <div className="tool-group" role="group" aria-label="Insert objects">
           <button type="button" onClick={insertNote}>Note</button>
+          <button type="button" onClick={() => imageInputRef.current?.click()}>Image</button>
+          <input
+            ref={imageInputRef}
+            className="visually-hidden"
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            onChange={insertImage}
+            tabIndex={-1}
+          />
           <button type="button" disabled={selectedConnectables.length !== 2} onClick={connectSelection}>Connect</button>
         </div>
+
+        {imageNotice && <span className="asset-message" role="status">{imageNotice}</span>}
 
         <div className="tool-group" role="group" aria-label="Selection actions">
           <span>{selectedIds.size} selected</span>
@@ -700,6 +774,40 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
                   );
                 })}
 
+                {images.map((imageObject) => {
+                  const position = positionFor(imageObject);
+                  const dimensions = sizeFor(imageObject);
+                  const selected = selectedIds.has(imageObject.id);
+                  return (
+                    <Group
+                      key={imageObject.id}
+                      x={position.x}
+                      y={position.y}
+                      draggable={tool === "select"}
+                      onPointerDown={(event) => selectObject(imageObject.id, event.evt.shiftKey)}
+                      onDragMove={(event) => previewPosition(imageObject.id, { x: event.target.x(), y: event.target.y() })}
+                      onDragEnd={(event) => commitPosition(imageObject.id, { x: event.target.x(), y: event.target.y() })}
+                    >
+                      <CanvasImage assetHash={imageObject.assetHash} name={imageObject.name} width={dimensions.width} height={dimensions.height} />
+                      <Rect width={dimensions.width} height={dimensions.height} stroke={selected ? "#ef8c45" : "rgba(44, 95, 93, 0.35)"} strokeWidth={selected ? 3 : 1} />
+                      {selected && selectedIds.size === 1 && (
+                        <Circle
+                          x={dimensions.width}
+                          y={dimensions.height}
+                          radius={8 / camera.scale}
+                          fill="#ef8c45"
+                          stroke="white"
+                          strokeWidth={2 / camera.scale}
+                          draggable
+                          onPointerDown={(event) => { event.cancelBubble = true; }}
+                          onDragMove={(event) => previewSize(imageObject.id, { width: Math.max(60, event.target.x()), height: Math.max(60, event.target.y()) })}
+                          onDragEnd={(event) => commitSize(imageObject.id, { width: Math.max(60, event.target.x()), height: Math.max(60, event.target.y()) })}
+                        />
+                      )}
+                    </Group>
+                  );
+                })}
+
                 {nodes.map((node) => {
                   const position = positionFor(node);
                   const dimensions = sizeFor(node);
@@ -769,6 +877,10 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
               onEditText={(title, body) => updateTextCard(card.id, title, body)}
             />
           ))}
+        </div>
+
+        <div className="visually-hidden" aria-label="Canvas images">
+          {images.map((imageObject) => <span key={imageObject.id}>Image: {imageObject.name}. </span>)}
         </div>
 
         {size.width > 0 && size.height > 0 && (

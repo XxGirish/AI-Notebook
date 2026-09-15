@@ -79,6 +79,8 @@ A short decision record contains the exact engine version, supported device/brow
 
 **Progress — 2026-09-15 (grouping):** Mixed learning objects can now be grouped and ungrouped through atomic document commands. Selecting one member expands to the complete group; dragging a member translates every grouped card, shape, node, and ink stroke while semantic connectors redraw from their endpoints. Bound connectors are included automatically, and duplicated groups receive fresh group identities rather than remaining attached to the originals. Browser checks verified Shift selection, group expansion from one React-card member, and ungrouping. Seventeen focused tests pass. Multi-object scaling/rotation and nested groups remain intentionally unsupported.
 
+**Progress — 2026-09-15 (images):** PNG, JPEG, WebP, and GIF files up to 12 MB can now be inserted as semantic image objects. The browser hashes and durably stores each Blob in a separate IndexedDB asset table before committing lightweight page metadata, so duplicates reuse the same content-addressed binary. Images render in Konva with loading/missing states and support selection, movement, resizing, grouping, connector binding, duplication, lasso, persistence, and a screen-reader text representation. Invalid asset hashes are rejected by document validation. Eighteen focused tests pass. A real file-import round trip, asset integrity revalidation, orphan cleanup, archive inclusion, and static export remain open.
+
 **Work**
 
 - Set up the frontend, local database, schema package, formatter/type checks, and minimal tests.

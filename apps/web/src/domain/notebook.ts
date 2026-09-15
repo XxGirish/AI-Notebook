@@ -47,6 +47,13 @@ export type ShapeObject = ObjectBase & {
   stroke: string;
 };
 
+export type ImageObject = ObjectBase & {
+  kind: "image";
+  assetHash: string;
+  mimeType: string;
+  name: string;
+};
+
 export type ConnectorObject = ObjectBase & {
   kind: "connector";
   fromId: string;
@@ -73,6 +80,7 @@ export type NotebookObject =
   | EquationCardObject
   | GraphNodeObject
   | ShapeObject
+  | ImageObject
   | ConnectorObject
   | QuizCardObject;
 
@@ -98,6 +106,10 @@ export function validateFixture(fixture: NotebookFixture): string[] {
     if (object.kind === "connector") {
       if (!ids.has(object.fromId)) errors.push(`Missing connector source: ${object.fromId}`);
       if (!ids.has(object.toId)) errors.push(`Missing connector target: ${object.toId}`);
+    }
+
+    if (object.kind === "image" && !/^[a-f0-9]{64}$/.test(object.assetHash)) {
+      errors.push(`Image ${object.id} has an invalid asset hash`);
     }
 
     if (

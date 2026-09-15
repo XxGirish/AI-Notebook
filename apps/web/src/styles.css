@@ -10,6 +10,7 @@
 
 html, body, #root { min-width: 320px; min-height: 100%; margin: 0; }
 button { font: inherit; }
+.visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0 0 0 0) !important; white-space: nowrap !important; border: 0 !important; }
 
 .app-shell {
   min-height: 100vh;
@@ -185,6 +186,7 @@ button { font: inherit; }
 }
 .prototype-toolbar span { padding: 0 8px; color: #607075; font-size: 0.82rem; }
 .prototype-toolbar button:disabled { cursor: not-allowed; opacity: 0.45; }
+.asset-message { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #536267; font-size: 0.76rem; }
 .tool-group { display: flex; align-items: center; gap: 4px; }
 .tool-group + .tool-group { padding-left: 8px; border-left: 1px solid #d8d2c6; }
 .size-control, .finger-toggle { display: flex; align-items: center; gap: 7px; min-height: 40px; padding: 0 8px; color: #536267; font-size: 0.82rem; }

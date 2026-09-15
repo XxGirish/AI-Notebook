@@ -7,9 +7,18 @@ import {
   type PageRecoverySnapshot,
 } from "./pageRecords";
 
+export type AssetRecord = {
+  hash: string;
+  blob: Blob;
+  mimeType: string;
+  size: number;
+  createdAt: number;
+};
+
 class NotebookDatabase extends Dexie {
   pages!: EntityTable<NotebookPage, "id">;
   recoverySnapshots!: EntityTable<PageRecoverySnapshot, "pageId">;
+  assets!: EntityTable<AssetRecord, "hash">;
 
   constructor() {
     super("ai-notebook");
@@ -23,6 +32,11 @@ class NotebookDatabase extends Dexie {
         for (const key of Object.keys(page)) delete page[key];
         Object.assign(page, migrated);
       });
+    });
+    this.version(3).stores({
+      pages: "id, createdAt, updatedAt",
+      recoverySnapshots: "pageId, capturedAt",
+      assets: "hash, createdAt",
     });
   }
 }
@@ -97,4 +111,18 @@ export function restorePreviousPage(pageId: string): Promise<NotebookPage | unde
       return swapped.restored;
     },
   ));
+}
+
+export async function saveAsset(blob: Blob): Promise<AssetRecord> {
+  const digest = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
+  const hash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  const existing = await database.assets.get(hash);
+  if (existing) return existing;
+  const asset: AssetRecord = { hash, blob, mimeType: blob.type, size: blob.size, createdAt: Date.now() };
+  await database.assets.put(asset);
+  return asset;
+}
+
+export async function loadAsset(hash: string): Promise<AssetRecord | undefined> {
+  return database.assets.get(hash);
 }

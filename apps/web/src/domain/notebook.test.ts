@@ -20,4 +20,26 @@ describe("Phase 0 semantic fixture", () => {
       ]),
     );
   });
+
+  it("rejects image objects without a content hash", () => {
+    expect(validateFixture({
+      schemaVersion: 1,
+      id: "image-page",
+      title: "Images",
+      width: 800,
+      height: 600,
+      objects: [{
+        id: "image-1",
+        revision: 1,
+        kind: "image",
+        assetHash: "not-a-hash",
+        mimeType: "image/png",
+        name: "diagram.png",
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 100,
+      }],
+    })).toEqual(["Image image-1 has an invalid asset hash"]);
+  });
 });
