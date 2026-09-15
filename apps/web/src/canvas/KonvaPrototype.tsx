@@ -13,17 +13,19 @@ import type {
 } from "../domain/notebook";
 import { LearningCard } from "../components/LearningCard";
 import { saveAsset } from "../persistence/notebookDatabase";
+import { isQuotaExceededError } from "../persistence/storageHealth";
 import { CanvasImage } from "./CanvasImage";
 import { getStrokePath } from "./strokePath";
 import { expandGroupedIds, groupObjects, translateObjectGroup, ungroupObjects } from "./groupMath";
 import { objectIntersectsPolygon } from "./selectionMath";
-import { boundsFromPoints, type CanvasBounds } from "./shapeMath";
+import { boundsFromPoints, sizeFromBottomRightHandle, type CanvasBounds } from "./shapeMath";
 import { appendDistinctPoints, strokeIntersectsPoint } from "./strokeMath";
 import { useElementSize } from "./useElementSize";
 import { wheelDeltaInPixels, wheelZoomScale, zoomCameraAt, type Camera } from "./cameraMath";
 
 type Props = {
   fixture: NotebookFixture;
+  readOnly?: boolean;
   onObjectsChange?: (objects: NotebookObject[]) => void;
 };
 type Tool = "select" | "lasso" | "pen" | "highlighter" | "eraser" | "rectangle" | "ellipse" | "pan";
@@ -59,7 +61,7 @@ const readImageDimensions = (blob: Blob) => new Promise<Size>((resolve, reject) 
   image.src = url;
 });
 
-export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
+export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: Props) {
   const prototypeRef = useRef<HTMLElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -103,6 +105,10 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
   useEffect(() => () => {
     if (animationFrameRef.current !== undefined) cancelAnimationFrame(animationFrameRef.current);
   }, []);
+
+  useEffect(() => {
+    if (readOnly && tool !== "select" && tool !== "pan") setTool("select");
+  }, [readOnly, tool]);
 
   useEffect(() => {
     const viewport = rootRef.current;
@@ -165,15 +171,17 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
       if (target?.closest("input, textarea, button, [contenteditable='true']")) return;
       const modifier = event.ctrlKey || event.metaKey;
       if (modifier && event.key.toLowerCase() === "z") {
+        if (readOnly) return;
         event.preventDefault();
         setHistory((current) => event.shiftKey ? redoHistory(current) : undoHistory(current));
       } else if (modifier && event.key.toLowerCase() === "y") {
+        if (readOnly) return;
         event.preventDefault();
         setHistory(redoHistory);
       } else if (!modifier) {
         const shortcut: Partial<Record<string, Tool>> = { v: "select", l: "lasso", p: "pen", h: "highlighter", e: "eraser", r: "rectangle", o: "ellipse", " ": "pan" };
         const nextTool = shortcut[event.key.toLowerCase()];
-        if (nextTool) {
+        if (nextTool && (!readOnly || nextTool === "select" || nextTool === "pan")) {
           event.preventDefault();
           setTool(nextTool);
         }
@@ -181,12 +189,13 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  }, [readOnly]);
 
   const positionFor = (object: NotebookObject) => transientPositions[object.id] ?? { x: object.x, y: object.y };
   const sizeFor = (object: NotebookObject) => transientSizes[object.id] ?? { width: object.width, height: object.height };
 
   const commitObjects = (update: (objects: NotebookObject[]) => NotebookObject[]) => {
+    if (readOnly) return;
     setHistory((current) => commitHistory(current, update(current.present)));
   };
 
@@ -230,6 +239,20 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
       delete next[id];
       return next;
     });
+  };
+
+  const resizeFromHandle = (event: KonvaEventObject<DragEvent>, id: string, minimum: Size, commit: boolean) => {
+    event.cancelBubble = true;
+    const nextSize = sizeFromBottomRightHandle(
+      { x: event.currentTarget.x(), y: event.currentTarget.y() },
+      minimum,
+    );
+
+    // Keep the handle under the pointer at the minimum instead of allowing the
+    // draggable Konva node to visually detach from the clamped object bounds.
+    event.currentTarget.position({ x: nextSize.width, y: nextSize.height });
+    if (commit) commitSize(id, nextSize);
+    else previewSize(id, nextSize);
   };
 
   const updateTextCard = (id: string, title: string, body: string) => {
@@ -383,8 +406,8 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
       setSelectedIds(new Set([object.id]));
       setTool("select");
       setImageNotice(`${file.name} added`);
-    } catch {
-      setImageNotice("The image could not be imported.");
+    } catch (error) {
+      setImageNotice(isQuotaExceededError(error) ? "Storage is full; the image was not added." : "The image could not be imported.");
     }
   };
 
@@ -622,7 +645,7 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
   };
 
   const resetCamera = () => setCamera({ x: 24, y: 24, scale: 0.86 });
-  const inputActive = tool !== "select";
+  const inputActive = tool !== "select" && (!readOnly || tool === "pan");
   const visibleStrokes = strokes.filter((stroke) => !erasingIds.has(stroke.id));
   const currentStrokeTool = tool === "highlighter" ? "highlighter" : "pen";
   const currentStrokeSize = currentStrokeTool === "highlighter" ? highlighterSize : penSize;
@@ -641,7 +664,7 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
             ["ellipse", "Ellipse", "O"],
             ["pan", "Hand", "Space"],
           ] as const).map(([value, label, shortcut]) => (
-            <button key={value} type="button" aria-pressed={tool === value} onClick={() => setTool(value)} title={`${label} (${shortcut})`}>
+            <button key={value} type="button" aria-pressed={tool === value} onClick={() => setTool(value)} title={`${label} (${shortcut})`} disabled={readOnly && value !== "select" && value !== "pan"}>
               {label}
             </button>
           ))}
@@ -663,18 +686,18 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
         )}
 
         <label className="finger-toggle">
-          <input type="checkbox" checked={fingerDrawing} onChange={(event) => setFingerDrawing(event.target.checked)} />
+          <input type="checkbox" checked={fingerDrawing} onChange={(event) => setFingerDrawing(event.target.checked)} disabled={readOnly} />
           Finger draws
         </label>
 
         <div className="tool-group" role="group" aria-label="History">
-          <button type="button" disabled={history.past.length === 0} onClick={() => setHistory(undoHistory)} title="Undo (Ctrl+Z)">Undo</button>
-          <button type="button" disabled={history.future.length === 0} onClick={() => setHistory(redoHistory)} title="Redo (Ctrl+Y)">Redo</button>
+          <button type="button" disabled={readOnly || history.past.length === 0} onClick={() => setHistory(undoHistory)} title="Undo (Ctrl+Z)">Undo</button>
+          <button type="button" disabled={readOnly || history.future.length === 0} onClick={() => setHistory(redoHistory)} title="Redo (Ctrl+Y)">Redo</button>
         </div>
 
         <div className="tool-group" role="group" aria-label="Insert objects">
-          <button type="button" onClick={insertNote}>Note</button>
-          <button type="button" onClick={() => imageInputRef.current?.click()}>Image</button>
+          <button type="button" onClick={insertNote} disabled={readOnly}>Note</button>
+          <button type="button" onClick={() => imageInputRef.current?.click()} disabled={readOnly}>Image</button>
           <input
             ref={imageInputRef}
             className="visually-hidden"
@@ -682,18 +705,19 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
             accept="image/png,image/jpeg,image/webp,image/gif"
             onChange={insertImage}
             tabIndex={-1}
+            disabled={readOnly}
           />
-          <button type="button" disabled={selectedConnectables.length !== 2} onClick={connectSelection}>Connect</button>
+          <button type="button" disabled={readOnly || selectedConnectables.length !== 2} onClick={connectSelection}>Connect</button>
         </div>
 
         {imageNotice && <span className="asset-message" role="status">{imageNotice}</span>}
 
         <div className="tool-group" role="group" aria-label="Selection actions">
           <span>{selectedIds.size} selected</span>
-          <button type="button" disabled={selectedIds.size === 0} onClick={duplicateSelection}>Duplicate</button>
-          <button type="button" disabled={selectedIds.size === 0} onClick={deleteSelection}>Delete</button>
-          <button type="button" disabled={!canGroup} onClick={groupSelection}>Group</button>
-          <button type="button" disabled={!canUngroup} onClick={ungroupSelection}>Ungroup</button>
+          <button type="button" disabled={readOnly || selectedIds.size === 0} onClick={duplicateSelection}>Duplicate</button>
+          <button type="button" disabled={readOnly || selectedIds.size === 0} onClick={deleteSelection}>Delete</button>
+          <button type="button" disabled={readOnly || !canGroup} onClick={groupSelection}>Group</button>
+          <button type="button" disabled={readOnly || !canUngroup} onClick={ungroupSelection}>Ungroup</button>
         </div>
 
         <div className="tool-group" role="group" aria-label="Zoom">
@@ -746,10 +770,16 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
                       key={shape.id}
                       x={position.x}
                       y={position.y}
-                      draggable={tool === "select"}
+                      draggable={tool === "select" && !readOnly}
                       onPointerDown={(event) => selectObject(shape.id, event.evt.shiftKey)}
-                      onDragMove={(event) => previewPosition(shape.id, { x: event.target.x(), y: event.target.y() })}
-                      onDragEnd={(event) => commitPosition(shape.id, { x: event.target.x(), y: event.target.y() })}
+                      onDragMove={(event) => {
+                        if (event.target !== event.currentTarget) return;
+                        previewPosition(shape.id, { x: event.currentTarget.x(), y: event.currentTarget.y() });
+                      }}
+                      onDragEnd={(event) => {
+                        if (event.target !== event.currentTarget) return;
+                        commitPosition(shape.id, { x: event.currentTarget.x(), y: event.currentTarget.y() });
+                      }}
                     >
                       {shape.shape === "ellipse" ? (
                         <Ellipse x={dimensions.width / 2} y={dimensions.height / 2} radiusX={dimensions.width / 2} radiusY={dimensions.height / 2} fill={shape.fill} stroke={selected ? "#ef8c45" : shape.stroke} strokeWidth={selected ? 3 : 2} />
@@ -766,8 +796,10 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
                           strokeWidth={2 / camera.scale}
                           draggable
                           onPointerDown={(event) => { event.cancelBubble = true; }}
-                          onDragMove={(event) => previewSize(shape.id, { width: Math.max(40, event.target.x()), height: Math.max(40, event.target.y()) })}
-                          onDragEnd={(event) => commitSize(shape.id, { width: Math.max(40, event.target.x()), height: Math.max(40, event.target.y()) })}
+                          onDragStart={(event) => { event.cancelBubble = true; }}
+                          onDragMove={(event) => resizeFromHandle(event, shape.id, { width: 40, height: 40 }, false)}
+                          onDragEnd={(event) => resizeFromHandle(event, shape.id, { width: 40, height: 40 }, true)}
+                          hitStrokeWidth={28 / camera.scale}
                         />
                       )}
                     </Group>
@@ -783,10 +815,16 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
                       key={imageObject.id}
                       x={position.x}
                       y={position.y}
-                      draggable={tool === "select"}
+                      draggable={tool === "select" && !readOnly}
                       onPointerDown={(event) => selectObject(imageObject.id, event.evt.shiftKey)}
-                      onDragMove={(event) => previewPosition(imageObject.id, { x: event.target.x(), y: event.target.y() })}
-                      onDragEnd={(event) => commitPosition(imageObject.id, { x: event.target.x(), y: event.target.y() })}
+                      onDragMove={(event) => {
+                        if (event.target !== event.currentTarget) return;
+                        previewPosition(imageObject.id, { x: event.currentTarget.x(), y: event.currentTarget.y() });
+                      }}
+                      onDragEnd={(event) => {
+                        if (event.target !== event.currentTarget) return;
+                        commitPosition(imageObject.id, { x: event.currentTarget.x(), y: event.currentTarget.y() });
+                      }}
                     >
                       <CanvasImage assetHash={imageObject.assetHash} name={imageObject.name} width={dimensions.width} height={dimensions.height} />
                       <Rect width={dimensions.width} height={dimensions.height} stroke={selected ? "#ef8c45" : "rgba(44, 95, 93, 0.35)"} strokeWidth={selected ? 3 : 1} />
@@ -800,8 +838,10 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
                           strokeWidth={2 / camera.scale}
                           draggable
                           onPointerDown={(event) => { event.cancelBubble = true; }}
-                          onDragMove={(event) => previewSize(imageObject.id, { width: Math.max(60, event.target.x()), height: Math.max(60, event.target.y()) })}
-                          onDragEnd={(event) => commitSize(imageObject.id, { width: Math.max(60, event.target.x()), height: Math.max(60, event.target.y()) })}
+                          onDragStart={(event) => { event.cancelBubble = true; }}
+                          onDragMove={(event) => resizeFromHandle(event, imageObject.id, { width: 60, height: 60 }, false)}
+                          onDragEnd={(event) => resizeFromHandle(event, imageObject.id, { width: 60, height: 60 }, true)}
+                          hitStrokeWidth={28 / camera.scale}
                         />
                       )}
                     </Group>
@@ -817,10 +857,16 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
                       key={node.id}
                       x={position.x}
                       y={position.y}
-                      draggable={tool === "select"}
+                      draggable={tool === "select" && !readOnly}
                       onPointerDown={(event) => selectObject(node.id, event.evt.shiftKey)}
-                      onDragMove={(event) => previewPosition(node.id, { x: event.target.x(), y: event.target.y() })}
-                      onDragEnd={(event) => commitPosition(node.id, { x: event.target.x(), y: event.target.y() })}
+                      onDragMove={(event) => {
+                        if (event.target !== event.currentTarget) return;
+                        previewPosition(node.id, { x: event.currentTarget.x(), y: event.currentTarget.y() });
+                      }}
+                      onDragEnd={(event) => {
+                        if (event.target !== event.currentTarget) return;
+                        commitPosition(node.id, { x: event.currentTarget.x(), y: event.currentTarget.y() });
+                      }}
                     >
                       <Rect
                         width={dimensions.width}
@@ -843,8 +889,10 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
                           strokeWidth={2 / camera.scale}
                           draggable
                           onPointerDown={(event) => { event.cancelBubble = true; }}
-                          onDragMove={(event) => previewSize(node.id, { width: Math.max(80, event.target.x()), height: Math.max(48, event.target.y()) })}
-                          onDragEnd={(event) => commitSize(node.id, { width: Math.max(80, event.target.x()), height: Math.max(48, event.target.y()) })}
+                          onDragStart={(event) => { event.cancelBubble = true; }}
+                          onDragMove={(event) => resizeFromHandle(event, node.id, { width: 80, height: 48 }, false)}
+                          onDragEnd={(event) => resizeFromHandle(event, node.id, { width: 80, height: 48 }, true)}
+                          hitStrokeWidth={28 / camera.scale}
                         />
                       )}
                     </Group>
@@ -868,7 +916,8 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
               size={sizeFor(card)}
               cameraScale={camera.scale}
               selected={selectedIds.has(card.id)}
-              resizable={selectedIds.size === 1}
+              resizable={!readOnly && selectedIds.size === 1}
+              readOnly={readOnly}
               onSelect={(additive) => selectObject(card.id, additive)}
               onMove={(position) => previewPosition(card.id, position)}
               onMoveEnd={(position) => commitPosition(card.id, position)}

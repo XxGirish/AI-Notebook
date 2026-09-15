@@ -9,6 +9,21 @@ export type PageRecoverySnapshot = {
   page: NotebookPage;
 };
 
+export class PageWriteConflictError extends Error {
+  constructor(pageId: string) {
+    super(`Page ${pageId} changed in another tab`);
+    this.name = "PageWriteConflictError";
+  }
+}
+
+export function assertExpectedPageVersion(current: NotebookPage | undefined, expectedUpdatedAt: number | undefined, pageId: string): void {
+  if (expectedUpdatedAt === undefined) {
+    if (current) throw new PageWriteConflictError(pageId);
+    return;
+  }
+  if (!current || current.updatedAt !== expectedUpdatedAt) throw new PageWriteConflictError(pageId);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -70,7 +85,7 @@ export function swapPageWithRecovery(
   }
 
   return {
-    restored: { ...structuredClone(recovery.page), updatedAt: now },
+    restored: { ...structuredClone(recovery.page), updatedAt: Math.max(now, current.updatedAt + 1, recovery.page.updatedAt + 1) },
     recovery: createRecoverySnapshot(current, now),
   };
 }

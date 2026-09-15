@@ -33,9 +33,9 @@ export function pageFromFixture(fixture: NotebookFixture, now = Date.now()): Not
 }
 
 export function renamePage(page: NotebookPage, title: string, now = Date.now()): NotebookPage {
-  return { ...page, title: normalizePageTitle(title, page.title), updatedAt: now };
+  return { ...page, title: normalizePageTitle(title, page.title), updatedAt: Math.max(now, page.updatedAt + 1) };
 }
 
 export function replacePageObjects(page: NotebookPage, objects: NotebookObject[], now = Date.now()): NotebookPage {
-  return { ...page, objects, updatedAt: now };
+  return { ...page, objects, updatedAt: Math.max(now, page.updatedAt + 1) };
 }

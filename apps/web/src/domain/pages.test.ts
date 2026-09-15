@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createNotebookPage, normalizePageTitle, renamePage } from "./pages";
+import { createNotebookPage, normalizePageTitle, renamePage, replacePageObjects } from "./pages";
 
 describe("notebook pages", () => {
   it("creates an independent empty page with a stable title", () => {
@@ -16,5 +16,13 @@ describe("notebook pages", () => {
 
   it("normalizes whitespace in sidebar titles", () => {
     expect(normalizePageTitle("  Energy   and work ")).toBe("Energy and work");
+  });
+
+  it("advances the page revision timestamp even when the clock does not", () => {
+    const page = { ...createNotebookPage("Dynamics", 100), id: "page-1" };
+    const renamed = renamePage(page, "Motion", 100);
+    const changed = replacePageObjects(renamed, [], 99);
+    expect(renamed.updatedAt).toBe(101);
+    expect(changed.updatedAt).toBe(102);
   });
 });

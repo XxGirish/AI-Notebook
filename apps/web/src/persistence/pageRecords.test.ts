@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createNotebookPage } from "../domain/pages";
-import { createRecoverySnapshot, migratePersistedPage, swapPageWithRecovery } from "./pageRecords";
+import { assertExpectedPageVersion, createRecoverySnapshot, PageWriteConflictError, migratePersistedPage, swapPageWithRecovery } from "./pageRecords";
 
 describe("persisted page records", () => {
   it("migrates the pre-versioned page shape and supplies object revisions", () => {
@@ -35,5 +35,13 @@ describe("persisted page records", () => {
     const page = { ...createNotebookPage("One", 10), id: "page-1" };
     const other = { ...createNotebookPage("Two", 10), id: "page-2" };
     expect(() => swapPageWithRecovery(page, createRecoverySnapshot(other), 30)).toThrow(/another page/);
+  });
+
+  it("rejects stale writes while accepting the exact stored revision", () => {
+    const current = { ...createNotebookPage("Current", 20), id: "page-1" };
+    expect(() => assertExpectedPageVersion(current, 20, current.id)).not.toThrow();
+    expect(() => assertExpectedPageVersion(current, 19, current.id)).toThrow(PageWriteConflictError);
+    expect(() => assertExpectedPageVersion(current, undefined, current.id)).toThrow(PageWriteConflictError);
+    expect(() => assertExpectedPageVersion(undefined, undefined, "new-page")).not.toThrow();
   });
 });

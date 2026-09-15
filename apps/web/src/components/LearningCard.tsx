@@ -1,5 +1,5 @@
 import katex from "katex";
-import { useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type {
   EquationCardObject,
   QuizCardObject,
@@ -16,6 +16,7 @@ type Props = {
   cameraScale: number;
   selected: boolean;
   resizable: boolean;
+  readOnly: boolean;
   onSelect: (additive: boolean) => void;
   onMove: (position: Position) => void;
   onMoveEnd: (position: Position) => void;
@@ -24,13 +25,18 @@ type Props = {
   onEditText: (title: string, body: string) => void;
 };
 
-export function LearningCard({ object, position, size, cameraScale, selected, resizable, onSelect, onMove, onMoveEnd, onResize, onResizeEnd, onEditText }: Props) {
+export function LearningCard({ object, position, size, cameraScale, selected, resizable, readOnly, onSelect, onMove, onMoveEnd, onResize, onResizeEnd, onEditText }: Props) {
   const [answer, setAnswer] = useState<string>();
   const [editing, setEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState(object.kind === "text-card" ? object.title : "");
   const [draftBody, setDraftBody] = useState(object.kind === "text-card" ? object.body : "");
 
+  useEffect(() => {
+    if (readOnly) setEditing(false);
+  }, [readOnly]);
+
   const beginDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (readOnly) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     const origin = { pointerX: event.clientX, pointerY: event.clientY, ...position };
@@ -120,11 +126,12 @@ export function LearningCard({ object, position, size, cameraScale, selected, re
         type="button"
         onPointerDown={beginDrag}
         aria-label={`Move ${object.kind}`}
+        disabled={readOnly}
       >
         <span aria-hidden="true">⠿</span> Move
       </button>
 
-      {object.kind === "text-card" && !editing && (
+      {object.kind === "text-card" && !editing && !readOnly && (
         <button type="button" className="learning-card__edit" onClick={() => setEditing(true)}>Edit</button>
       )}
 
