@@ -4,12 +4,14 @@ import { PageSidebar } from "./components/PageSidebar";
 import type { NotebookObject } from "./domain/notebook";
 import { createNotebookPage, pageFromFixture, renamePage, replacePageObjects, type NotebookPage } from "./domain/pages";
 import { phaseZeroFixture } from "./fixtures/phaseZeroFixture";
-import { deletePage, loadPages, savePage } from "./persistence/notebookDatabase";
+import { deletePage, hasRecoverySnapshot, loadPages, restorePreviousPage, savePage } from "./persistence/notebookDatabase";
 
 export function App() {
   const [pages, setPages] = useState<NotebookPage[]>([]);
   const [activePageId, setActivePageId] = useState("");
   const [saveStatus, setSaveStatus] = useState<"loading" | "saving" | "saved" | "error">("loading");
+  const [canRestore, setCanRestore] = useState(false);
+  const [canvasGeneration, setCanvasGeneration] = useState(0);
   const pagesRef = useRef<NotebookPage[]>([]);
   const saveSequenceRef = useRef(0);
 
@@ -22,8 +24,11 @@ export function App() {
     const sequence = ++saveSequenceRef.current;
     setSaveStatus("saving");
     void savePage(page).then(
-      () => {
-        if (saveSequenceRef.current === sequence) setSaveStatus("saved");
+      ({ hasRecovery }) => {
+        if (saveSequenceRef.current === sequence) {
+          setSaveStatus("saved");
+          if (page.id === activePageId) setCanRestore(hasRecovery);
+        }
       },
       () => {
         if (saveSequenceRef.current === sequence) setSaveStatus("error");
@@ -39,6 +44,7 @@ export function App() {
         replacePages(storedPages);
         setActivePageId(storedPages[0].id);
         setSaveStatus("saved");
+        void hasRecoverySnapshot(storedPages[0].id).then(setCanRestore);
         return;
       }
 
@@ -57,6 +63,17 @@ export function App() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!activePageId) return;
+    let cancelled = false;
+    void hasRecoverySnapshot(activePageId).then((available) => {
+      if (!cancelled) setCanRestore(available);
+    }, () => {
+      if (!cancelled) setCanRestore(false);
+    });
+    return () => { cancelled = true; };
+  }, [activePageId]);
 
   const createPage = () => {
     const page = createNotebookPage(`Page ${pagesRef.current.length + 1}`);
@@ -109,6 +126,32 @@ export function App() {
     persist(updated);
   }, [activePageId]);
 
+  const restoreActivePage = () => {
+    if (!activePageId) return;
+    const sequence = ++saveSequenceRef.current;
+    setSaveStatus("saving");
+    void restorePreviousPage(activePageId).then(
+      (restored) => {
+        if (!restored) {
+          if (saveSequenceRef.current === sequence) {
+            setSaveStatus("saved");
+            setCanRestore(false);
+          }
+          return;
+        }
+        replacePages(pagesRef.current.map((page) => page.id === restored.id ? restored : page));
+        setCanvasGeneration((current) => current + 1);
+        if (saveSequenceRef.current === sequence) {
+          setSaveStatus("saved");
+          setCanRestore(true);
+        }
+      },
+      () => {
+        if (saveSequenceRef.current === sequence) setSaveStatus("error");
+      },
+    );
+  };
+
   const activePage = pages.find((page) => page.id === activePageId);
 
   return (
@@ -117,10 +160,12 @@ export function App() {
         pages={pages}
         activePageId={activePageId}
         saveStatus={saveStatus}
+        canRestore={canRestore}
         onCreate={createPage}
         onOpen={setActivePageId}
         onRename={renameNotebookPage}
         onDelete={deleteNotebookPage}
+        onRestore={restoreActivePage}
       />
 
       <div className="notebook-workspace">
@@ -139,7 +184,7 @@ export function App() {
         </aside>
 
         {activePage && (
-          <KonvaPrototype key={activePage.id} fixture={activePage} onObjectsChange={updateActivePageObjects} />
+          <KonvaPrototype key={`${activePage.id}:${canvasGeneration}`} fixture={activePage} onObjectsChange={updateActivePageObjects} />
         )}
       </div>
     </main>

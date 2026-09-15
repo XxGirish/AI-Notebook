@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type WheelEvent as ReactWheelEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Arrow, Circle, Ellipse, Group, Layer, Line, Path, Rect, Stage, Text } from "react-konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import { commitHistory, createHistory, redoHistory, undoHistory } from "../domain/history";
@@ -16,6 +16,7 @@ import { objectIntersectsPolygon } from "./selectionMath";
 import { boundsFromPoints, type CanvasBounds } from "./shapeMath";
 import { appendDistinctPoints, strokeIntersectsPoint } from "./strokeMath";
 import { useElementSize } from "./useElementSize";
+import { wheelDeltaInPixels, wheelZoomScale, zoomCameraAt, type Camera } from "./cameraMath";
 
 type Props = {
   fixture: NotebookFixture;
@@ -24,7 +25,6 @@ type Props = {
 type Tool = "select" | "lasso" | "pen" | "highlighter" | "eraser" | "rectangle" | "ellipse" | "pan";
 type Position = { x: number; y: number };
 type Size = { width: number; height: number };
-type Camera = Position & { scale: number };
 type Gesture = {
   pointerId: number;
   kind: "stroke" | "erase" | "pan" | "lasso" | "shape";
@@ -34,15 +34,12 @@ type Gesture = {
   shapeType?: ShapeObject["shape"];
 };
 
-const MIN_ZOOM = 0.25;
-const MAX_ZOOM = 3;
-
-const clampZoom = (scale: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, scale));
 const isStroke = (object: NotebookObject): object is StrokeObject => object.kind === "stroke";
 const isGraphNode = (object: NotebookObject): object is GraphNodeObject => object.kind === "graph-node";
 const isShape = (object: NotebookObject): object is ShapeObject => object.kind === "shape";
 
 export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
+  const prototypeRef = useRef<HTMLElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const size = useElementSize(rootRef);
   const [tool, setTool] = useState<Tool>("select");
@@ -51,6 +48,8 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
   const [penSize, setPenSize] = useState(4.5);
   const [highlighterSize, setHighlighterSize] = useState(22);
   const [fingerDrawing, setFingerDrawing] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fullscreenFallback, setFullscreenFallback] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [transientPositions, setTransientPositions] = useState<Record<string, Position>>({});
   const [transientSizes, setTransientSizes] = useState<Record<string, Size>>({});
@@ -80,6 +79,55 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
   useEffect(() => () => {
     if (animationFrameRef.current !== undefined) cancelAnimationFrame(animationFrameRef.current);
   }, []);
+
+  useEffect(() => {
+    const viewport = rootRef.current;
+    if (!viewport) return;
+
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const rect = viewport.getBoundingClientRect();
+      const deltaX = wheelDeltaInPixels(event.deltaX, event.deltaMode, rect.height);
+      const deltaY = wheelDeltaInPixels(event.deltaY, event.deltaMode, rect.height);
+
+      if (event.ctrlKey || event.metaKey) {
+        const anchor = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+        setCamera((current) => zoomCameraAt(current, wheelZoomScale(current.scale, deltaY), anchor));
+        return;
+      }
+
+      setCamera((current) => ({ ...current, x: current.x - deltaX, y: current.y - deltaY }));
+    };
+
+    viewport.addEventListener("wheel", handleWheel, { passive: false });
+    return () => viewport.removeEventListener("wheel", handleWheel);
+  }, []);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const active = document.fullscreenElement === prototypeRef.current;
+      setIsFullscreen(active || fullscreenFallback);
+    };
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, [fullscreenFallback]);
+
+  useEffect(() => {
+    if (!fullscreenFallback) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const exitOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setFullscreenFallback(false);
+        setIsFullscreen(false);
+      }
+    };
+    window.addEventListener("keydown", exitOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", exitOnEscape);
+    };
+  }, [fullscreenFallback]);
 
   useEffect(() => {
     if (history.present === lastNotifiedObjectsRef.current) return;
@@ -438,22 +486,29 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
   };
 
   const zoomAt = (nextScale: number, anchor: Position) => {
-    setCamera((current) => {
-      const scale = clampZoom(nextScale);
-      const worldX = (anchor.x - current.x) / current.scale;
-      const worldY = (anchor.y - current.y) / current.scale;
-      return { scale, x: anchor.x - worldX * scale, y: anchor.y - worldY * scale };
-    });
+    setCamera((current) => zoomCameraAt(current, nextScale, anchor));
   };
 
-  const handleWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    const rect = event.currentTarget.getBoundingClientRect();
-    if (event.ctrlKey || event.metaKey) {
-      const factor = Math.exp(-event.deltaY * 0.003);
-      zoomAt(camera.scale * factor, { x: event.clientX - rect.left, y: event.clientY - rect.top });
-    } else {
-      setCamera((current) => ({ ...current, x: current.x - event.deltaX, y: current.y - event.deltaY }));
+  const toggleFullscreen = async () => {
+    const element = prototypeRef.current;
+    if (!element) return;
+
+    if (fullscreenFallback) {
+      setFullscreenFallback(false);
+      setIsFullscreen(false);
+      return;
+    }
+
+    if (document.fullscreenElement === element) {
+      await document.exitFullscreen();
+      return;
+    }
+
+    try {
+      await element.requestFullscreen();
+    } catch {
+      setFullscreenFallback(true);
+      setIsFullscreen(true);
     }
   };
 
@@ -464,7 +519,7 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
   const currentStrokeSize = currentStrokeTool === "highlighter" ? highlighterSize : penSize;
 
   return (
-    <section className="prototype">
+    <section className="prototype" ref={prototypeRef} data-fullscreen-fallback={fullscreenFallback || undefined}>
       <div className="prototype-toolbar" aria-label="Canvas tools">
         <div className="tool-group" role="group" aria-label="Drawing tools">
           {([
@@ -523,10 +578,13 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
           <button type="button" onClick={() => zoomAt(camera.scale / 1.2, { x: size.width / 2, y: size.height / 2 })} aria-label="Zoom out">−</button>
           <button type="button" onClick={resetCamera} title="Reset camera">{Math.round(camera.scale * 100)}%</button>
           <button type="button" onClick={() => zoomAt(camera.scale * 1.2, { x: size.width / 2, y: size.height / 2 })} aria-label="Zoom in">+</button>
+          <button type="button" onClick={() => void toggleFullscreen()} aria-pressed={isFullscreen} aria-label={isFullscreen ? "Exit canvas fullscreen" : "Enter canvas fullscreen"}>
+            {isFullscreen ? "Exit full screen" : "Full screen"}
+          </button>
         </div>
       </div>
 
-      <div className="canvas-viewport" ref={rootRef} data-tool={tool} onWheel={handleWheel}>
+      <div className="canvas-viewport" ref={rootRef} data-tool={tool}>
         {size.width > 0 && size.height > 0 && (
           <Stage width={size.width} height={size.height} className="konva-stage">
             <Layer>
@@ -750,7 +808,7 @@ export function KonvaPrototype({ fixture, onObjectsChange }: Props) {
           <span>{tool === "eraser" ? "Whole-stroke eraser" : `${tool[0].toUpperCase()}${tool.slice(1)} tool`}</span>
           <span>{strokes.length} strokes</span>
           <span>{objects.length} objects</span>
-          <span>Wheel: pan · Ctrl+wheel: zoom</span>
+          <span>Wheel: pan · Ctrl/⌘+wheel: canvas zoom</span>
         </div>
       </div>
     </section>

@@ -5,13 +5,15 @@ type Props = {
   pages: NotebookPage[];
   activePageId: string;
   saveStatus: "loading" | "saving" | "saved" | "error";
+  canRestore: boolean;
   onCreate: () => void;
   onOpen: (pageId: string) => void;
   onRename: (pageId: string, title: string) => void;
   onDelete: (pageId: string) => void;
+  onRestore: () => void;
 };
 
-export function PageSidebar({ pages, activePageId, saveStatus, onCreate, onOpen, onRename, onDelete }: Props) {
+export function PageSidebar({ pages, activePageId, saveStatus, canRestore, onCreate, onOpen, onRename, onDelete, onRestore }: Props) {
   const [renamingId, setRenamingId] = useState<string>();
   const [deletingId, setDeletingId] = useState<string>();
   const [draftTitle, setDraftTitle] = useState("");
@@ -86,8 +88,11 @@ export function PageSidebar({ pages, activePageId, saveStatus, onCreate, onOpen,
       </nav>
 
       <div className="page-sidebar__footer" data-status={saveStatus}>
-        <span className="save-dot" aria-hidden="true" />
-        <span>{saveStatus === "loading" ? "Opening notebook…" : saveStatus === "saving" ? "Saving…" : saveStatus === "error" ? "Save failed" : "Saved locally"}</span>
+        <div className="save-state">
+          <span className="save-dot" aria-hidden="true" />
+          <span>{saveStatus === "loading" ? "Opening notebook…" : saveStatus === "saving" ? "Saving…" : saveStatus === "error" ? "Save failed" : "Saved locally"}</span>
+        </div>
+        {canRestore && <button type="button" className="restore-page-button" onClick={onRestore}>Restore previous</button>}
       </div>
     </aside>
   );
