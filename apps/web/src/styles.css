@@ -212,6 +212,19 @@ button { font: inherit; }
 .ai-draft__actions { display: flex; gap: 8px; flex: 0 0 auto; }
 .ai-draft__actions button { min-height: 36px; padding: 7px 12px; border: 1px solid #9bb6b2; border-radius: 8px; color: #315c58; background: white; cursor: pointer; font-weight: 700; }
 .ai-draft__actions button:last-child { border-color: #255f5b; color: white; background: #255f5b; }
+.diagram-label-editor { padding: 12px 14px; border: 1px solid #9fbdb8; border-radius: 12px; color: #244d4a; background: #edf7f5; }
+.diagram-label-editor form, .diagram-label-editor label { display: flex; align-items: center; gap: 10px; }
+.diagram-label-editor form { justify-content: space-between; }
+.diagram-label-editor label { flex: 1; }
+.diagram-label-editor label span { flex: 0 0 auto; font-size: 0.78rem; font-weight: 750; }
+.diagram-label-editor input { width: min(520px, 100%); min-height: 38px; padding: 7px 9px; border: 1px solid #9bb6b2; border-radius: 8px; color: #26383c; background: white; font: inherit; }
+.diagram-label-editor__actions { display: flex; gap: 8px; }
+.diagram-label-editor__actions button { min-height: 36px; padding: 7px 12px; border: 1px solid #9bb6b2; border-radius: 8px; color: #315c58; background: white; cursor: pointer; font-weight: 700; }
+.diagram-label-editor__actions button[type="submit"] { border-color: #255f5b; color: white; background: #255f5b; }
+.linear-reading-view { padding: 10px 14px; border: 1px solid #c9c3b6; border-radius: 12px; color: #34484b; background: rgba(255, 255, 255, 0.66); }
+.linear-reading-view summary { cursor: pointer; font-size: 0.82rem; font-weight: 750; }
+.linear-reading-view ol { max-height: 260px; margin: 10px 0 2px; padding-left: 24px; overflow-y: auto; }
+.linear-reading-view li, .linear-reading-view p { margin: 0 0 8px; color: #506064; font-size: 0.8rem; line-height: 1.45; white-space: pre-line; }
 .asset-message { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #536267; font-size: 0.76rem; }
 .tool-group { display: flex; align-items: center; gap: 4px; }
 .tool-group + .tool-group { padding-left: 8px; border-left: 1px solid #d8d2c6; }
@@ -281,7 +294,13 @@ button { font: inherit; }
 .note-editor__actions { display: flex; justify-content: flex-end; gap: 7px; }
 .note-editor__actions button { min-height: 30px; padding: 5px 10px; border: 0; border-radius: 7px; color: #365451; background: #e2ecea; cursor: pointer; }
 .note-editor__actions button[type="submit"] { color: white; background: #255f5b; }
+.quiz-editor fieldset { display: grid; gap: 7px; margin: 0; padding: 8px; border: 1px solid #d7c6a9; border-radius: 8px; }
+.quiz-editor legend { padding: 0 4px; color: #785139; font-size: 0.72rem; font-weight: 750; }
+.quiz-editor__option { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 7px; }
+.quiz-editor__option input[type="radio"] { width: 18px; height: 18px; accent-color: #255f5b; }
 .equation { padding: 12px 2px; font-size: 1.16rem; text-align: center; overflow: auto; }
+.equation--invalid { display: grid; gap: 8px; color: #9a3f2e; font-size: 0.78rem; text-align: left; }
+.equation--invalid code { padding: 7px; border-radius: 6px; background: #fff0ec; color: #713326; overflow-wrap: anywhere; white-space: pre-wrap; }
 .quiz-label { margin-bottom: 6px !important; color: #9d4e26 !important; font-size: 0.68rem !important; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; }
 .quiz-options { display: grid; gap: 7px; margin-top: 12px; }
 .quiz-options button { padding: 8px 10px; border: 1px solid #d7c6a9; border-radius: 9px; background: white; color: #35474a; text-align: left; cursor: pointer; }
@@ -321,5 +340,7 @@ button:focus-visible { outline: 3px solid #ef8c45; outline-offset: 2px; }
   .prototype-toolbar { align-items: flex-start; }
   .tool-group { flex-wrap: wrap; }
   .tool-group + .tool-group { padding-left: 0; border-left: 0; }
+  .diagram-label-editor form, .diagram-label-editor label { align-items: stretch; flex-direction: column; }
+  .diagram-label-editor__actions { align-self: flex-end; flex-direction: row; }
   .canvas-status span:last-child { display: none; }
 }

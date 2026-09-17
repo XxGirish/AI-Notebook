@@ -1,5 +1,6 @@
 import dagre from "@dagrejs/dagre";
-import type { AiTransactionRecord, GeneratedContentProvenance, NotebookObject } from "../domain/notebook";
+import { learningObjectAdapter } from "../domain/learningObjectAdapters";
+import type { AiTransactionRecord, EquationCardObject, GeneratedContentProvenance, NotebookObject, QuizCardObject, TextCardObject } from "../domain/notebook";
 import type { NotebookPage } from "../domain/pages";
 import type { CanvasProposal, DiagramPayload, EquationPayload, LearningPayloadSchema, QuizPayload, SemanticOperation, TextPayload } from "./proposalSchema";
 import type { z } from "zod";
@@ -35,40 +36,36 @@ export class CanvasBatchError extends Error {
   }
 }
 
-const textHeight = (text: string, width: number, base: number) => {
-  const charactersPerLine = Math.max(18, Math.floor((width - 36) / 7.2));
-  return base + Math.ceil(text.length / charactersPerLine) * 20;
-};
-
 function makeText(payload: TextPayload, id: string, groupId?: string): NotebookObject {
-  const width = 320;
-  return {
+  const object: TextCardObject = {
     id,
     revision: 1,
     groupId,
     kind: "text-card",
     x: 0,
     y: 0,
-    width,
-    height: Math.max(140, Math.min(420, textHeight(payload.body, width, 78))),
+    width: 0,
+    height: 0,
     title: payload.title,
     body: payload.body,
   };
+  return { ...object, ...learningObjectAdapter.measure(object) };
 }
 
 function makeEquation(payload: EquationPayload, id: string, allocateId: (prefix: string) => string, groupId?: string): NotebookObject[] {
-  const equation: NotebookObject = {
+  const equationDraft: EquationCardObject = {
     id,
     revision: 1,
     groupId,
     kind: "equation-card",
     x: 0,
     y: 0,
-    width: 320,
-    height: 140,
+    width: 0,
+    height: 0,
     title: payload.title,
     latex: payload.latex,
   };
+  const equation = { ...equationDraft, ...learningObjectAdapter.measure(equationDraft) };
   if (!payload.explanation) return [equation];
   const explanation = makeText({ kind: "text", title: "Explanation", body: payload.explanation }, allocateId("text"), groupId);
   return [equation, { ...explanation, y: equation.height + 28 }];
@@ -76,20 +73,21 @@ function makeEquation(payload: EquationPayload, id: string, allocateId: (prefix:
 
 function makeQuiz(payload: QuizPayload, id: string, allocateId: (prefix: string) => string, groupId?: string): NotebookObject {
   const optionIds = new Map(payload.options.map((option) => [option.localId, allocateId("option")]));
-  return {
+  const object: QuizCardObject = {
     id,
     revision: 1,
     groupId,
     kind: "quiz-card",
     x: 0,
     y: 0,
-    width: 340,
-    height: Math.max(260, 150 + payload.options.length * 46),
+    width: 0,
+    height: 0,
     prompt: payload.prompt,
     options: payload.options.map((option) => ({ id: optionIds.get(option.localId)!, label: option.label })),
     correctOptionId: optionIds.get(payload.correctOptionLocalId)!,
     rationale: payload.rationale,
   };
+  return { ...object, ...learningObjectAdapter.measure(object) };
 }
 
 function makeDiagram(payload: DiagramPayload, allocateId: (prefix: string) => string, groupId: string): NotebookObject[] {

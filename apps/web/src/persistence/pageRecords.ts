@@ -1,4 +1,5 @@
 import type { AiTransactionRecord, NotebookObject } from "../domain/notebook";
+import { learningObjectAdapter } from "../domain/learningObjectAdapters";
 import { normalizePageTitle, type NotebookPage } from "../domain/pages";
 
 export const CURRENT_PAGE_SCHEMA_VERSION = 2;
@@ -37,10 +38,14 @@ function migrateObject(value: unknown): NotebookObject {
     throw new Error("Stored page contains an invalid object");
   }
 
-  return {
+  const normalized: Record<string, unknown> = {
     ...value,
     revision: Math.max(1, finiteNumber(value.revision, 1)),
-  } as NotebookObject;
+  };
+  if (value.kind === "text-card" || value.kind === "equation-card" || value.kind === "quiz-card") {
+    return learningObjectAdapter.migrate(normalized);
+  }
+  return normalized as NotebookObject;
 }
 
 function migrateAiTransaction(value: unknown): AiTransactionRecord {
