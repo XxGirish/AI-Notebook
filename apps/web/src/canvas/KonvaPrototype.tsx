@@ -148,8 +148,25 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
       setCamera((current) => ({ ...current, x: current.x - deltaX, y: current.y - deltaY }));
     };
 
+    // The camera is the viewport's only offset. Browsers still scroll an
+    // overflow-hidden element to reveal a focused descendant (for example a
+    // card editor or a keyboard-focused off-screen card), which would shift the
+    // stage and card layer away from pointer mapping. Convert that into a pan.
+    const handleScroll = () => {
+      const deltaX = viewport.scrollLeft;
+      const deltaY = viewport.scrollTop;
+      if (deltaX === 0 && deltaY === 0) return;
+      viewport.scrollLeft = 0;
+      viewport.scrollTop = 0;
+      setCamera((current) => ({ ...current, x: current.x - deltaX, y: current.y - deltaY }));
+    };
+
     viewport.addEventListener("wheel", handleWheel, { passive: false });
-    return () => viewport.removeEventListener("wheel", handleWheel);
+    viewport.addEventListener("scroll", handleScroll);
+    return () => {
+      viewport.removeEventListener("wheel", handleWheel);
+      viewport.removeEventListener("scroll", handleScroll);
+    };
   }, []);
 
   useEffect(() => {
