@@ -37,6 +37,16 @@ describe("persisted page records", () => {
     expect(() => swapPageWithRecovery(page, createRecoverySnapshot(other), 30)).toThrow(/another page/);
   });
 
+  it("migrates learning cards through their adapter without truncating legacy content", () => {
+    const longBody = "x".repeat(9_000);
+    const migrated = migratePersistedPage({
+      id: "page-legacy-card",
+      objects: [{ id: "note", kind: "text-card", x: 1, y: 2, width: 320, height: 140, title: "Legacy", body: longBody }],
+    });
+
+    expect(migrated.objects[0]).toMatchObject({ kind: "text-card", revision: 1, body: longBody });
+  });
+
   it("rejects stale writes while accepting the exact stored revision", () => {
     const current = { ...createNotebookPage("Current", 20), id: "page-1" };
     expect(() => assertExpectedPageVersion(current, 20, current.id)).not.toThrow();

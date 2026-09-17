@@ -2,19 +2,24 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { Arrow, Circle, Ellipse, Group, Layer, Line, Path, Rect, Stage, Text } from "react-konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import { commitHistory, createHistory, redoHistory, undoHistory } from "../domain/history";
+import { applyLearningObjectEdit, getFocusedDiagramObject } from "../domain/learningObjects";
+import { buildLinearReadingItems } from "../domain/linearReading";
 import type {
   AiTransactionRecord,
+  ConnectorObject,
   GraphNodeObject,
   ImageObject,
   NotebookFixture,
   NotebookObject,
   PointSample,
+  QuizOption,
   ShapeObject,
   StrokeObject,
 } from "../domain/notebook";
 import { applyCanvasBatch, prepareCanvasBatch, transactionRecordFromBatch, type PreparedCanvasBatch } from "../ai/proposalCompiler";
 import { validateCanvasProposal, type SemanticOperationType } from "../ai/proposalSchema";
 import { LearningCard } from "../components/LearningCard";
+import { DiagramLabelEditor } from "../components/DiagramLabelEditor";
 import { mockLessonProposal } from "../fixtures/mockLessonProposal";
 import { saveAsset } from "../persistence/notebookDatabase";
 import { isQuotaExceededError } from "../persistence/storageHealth";
@@ -79,6 +84,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [fullscreenFallback, setFullscreenFallback] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [focusedObjectId, setFocusedObjectId] = useState<string>();
   const [transientPositions, setTransientPositions] = useState<Record<string, Position>>({});
   const [transientSizes, setTransientSizes] = useState<Record<string, Size>>({});
   const [liveStroke, setLiveStroke] = useState<PointSample[]>([]);
@@ -87,6 +93,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
   const [imageNotice, setImageNotice] = useState<string>();
   const [aiDraft, setAiDraft] = useState<PreparedCanvasBatch>();
   const [aiDraftError, setAiDraftError] = useState<string>();
+  const [editingDiagramObjectId, setEditingDiagramObjectId] = useState<string>();
   const [erasingIds, setErasingIds] = useState<Set<string>>(() => new Set());
   const liveStrokeRef = useRef<PointSample[]>([]);
   const lassoPointsRef = useRef<PointSample[]>([]);
@@ -109,6 +116,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
   );
   const connectables = useMemo(() => [...nodes, ...shapes, ...images], [nodes, shapes, images]);
   const connectableById = useMemo(() => new Map(connectables.map((object) => [object.id, object])), [connectables]);
+  const linearReadingItems = useMemo(() => buildLinearReadingItems(objects), [objects]);
 
   useEffect(() => () => {
     if (animationFrameRef.current !== undefined) cancelAnimationFrame(animationFrameRef.current);
@@ -269,14 +277,45 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
   };
 
   const updateTextCard = (id: string, title: string, body: string) => {
-    commitObjects((current) => current.map((object) =>
-      object.id === id && object.kind === "text-card"
-        ? { ...object, title, body, revision: object.revision + 1 }
-        : object,
-    ));
+    commitObjects((current) => applyLearningObjectEdit(current, id, { kind: "text-card", title, body }));
+  };
+
+  const updateEquationCard = (id: string, title: string, latex: string) => {
+    commitObjects((current) => applyLearningObjectEdit(current, id, { kind: "equation-card", title, latex }));
+  };
+
+  const updateQuizCard = (
+    id: string,
+    prompt: string,
+    options: QuizOption[],
+    correctOptionId: string,
+    rationale: string,
+  ) => {
+    commitObjects((current) => applyLearningObjectEdit(current, id, {
+      kind: "quiz-card",
+      prompt,
+      options,
+      correctOptionId,
+      rationale,
+    }));
+  };
+
+  const updateDiagramLabel = (id: string, label: string) => {
+    commitObjects((current) => {
+      const object = current.find((candidate) => candidate.id === id);
+      if (object?.kind === "graph-node") {
+        return applyLearningObjectEdit(current, id, { kind: "graph-node", label });
+      }
+      if (object?.kind === "connector") {
+        return applyLearningObjectEdit(current, id, { kind: "connector", label: label || undefined });
+      }
+      return current;
+    });
+    setEditingDiagramObjectId(undefined);
   };
 
   const selectObject = (id: string, additive = false) => {
+    setFocusedObjectId(id);
     const targetIds = expandGroupedIds(objects, new Set([id]));
     setSelectedIds((current) => {
       if (!additive) return targetIds;
@@ -298,6 +337,8 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
       && (object.kind !== "connector" || (!removed.has(object.fromId) && !removed.has(object.toId))),
     ));
     setSelectedIds(new Set());
+    setFocusedObjectId(undefined);
+    setEditingDiagramObjectId(undefined);
   };
 
   const duplicateSelection = () => {
@@ -341,6 +382,10 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
   };
 
   const selectedObjects = objects.filter((object) => selectedIds.has(object.id));
+  const selectedDiagramObject = getFocusedDiagramObject(objects, selectedIds, focusedObjectId);
+  const diagramObjectBeingEdited = objects.find((object) =>
+    object.id === editingDiagramObjectId && (object.kind === "graph-node" || object.kind === "connector"),
+  ) as GraphNodeObject | ConnectorObject | undefined;
   const selectedVisualObjects = selectedObjects.filter((object) => object.kind !== "connector");
   const selectedGroupIds = new Set(selectedObjects.flatMap((object) => object.groupId ? [object.groupId] : []));
   const canGroup = selectedVisualObjects.length >= 2
@@ -663,6 +708,8 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
         if (directSelection.has(connector.fromId) && directSelection.has(connector.toId)) directSelection.add(connector.id);
       }
       setSelectedIds(expandGroupedIds(objects, directSelection));
+      setFocusedObjectId(undefined);
+      setEditingDiagramObjectId(undefined);
       setTool("select");
     }
 
@@ -803,6 +850,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
           <button type="button" disabled={readOnly || selectedIds.size === 0} onClick={deleteSelection}>Delete</button>
           <button type="button" disabled={readOnly || !canGroup} onClick={groupSelection}>Group</button>
           <button type="button" disabled={readOnly || !canUngroup} onClick={ungroupSelection}>Ungroup</button>
+          <button type="button" disabled={readOnly || !selectedDiagramObject} onClick={() => setEditingDiagramObjectId(selectedDiagramObject?.id)}>Edit label</button>
         </div>
 
         <div className="tool-group" role="group" aria-label="Zoom">
@@ -829,13 +877,31 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
             )}
           </aside>
         )}
+
+        {diagramObjectBeingEdited && selectedIds.has(diagramObjectBeingEdited.id) && (
+          <DiagramLabelEditor
+            key={`${diagramObjectBeingEdited.id}:${diagramObjectBeingEdited.revision}`}
+            object={diagramObjectBeingEdited}
+            onCancel={() => setEditingDiagramObjectId(undefined)}
+            onSave={(label) => updateDiagramLabel(diagramObjectBeingEdited.id, label)}
+          />
+        )}
+
+        <details className="linear-reading-view">
+          <summary>Linear reading view</summary>
+          {linearReadingItems.length > 0 ? (
+            <ol>{linearReadingItems.map((item) => <li key={item.id}>{item.text}</li>)}</ol>
+          ) : (
+            <p>No readable learning objects on this page yet.</p>
+          )}
+        </details>
       </div>
 
       <div className="canvas-viewport" ref={rootRef} data-tool={tool}>
         {size.width > 0 && size.height > 0 && (
           <Stage width={size.width} height={size.height} className="konva-stage">
             <Layer>
-              <Rect width={size.width} height={size.height} fill="#fbfaf5" onPointerDown={() => setSelectedIds(new Set())} />
+              <Rect width={size.width} height={size.height} fill="#fbfaf5" onPointerDown={() => { setSelectedIds(new Set()); setFocusedObjectId(undefined); setEditingDiagramObjectId(undefined); }} />
             </Layer>
             <Layer listening={tool === "select"}>
               <Group x={camera.x} y={camera.y} scaleX={camera.scale} scaleY={camera.scale}>
@@ -847,18 +913,34 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
                   const toPosition = positionFor(to);
                   const fromSize = sizeFor(from);
                   const toSize = sizeFor(to);
+                  const x1 = fromPosition.x + fromSize.width;
+                  const y1 = fromPosition.y + fromSize.height / 2;
+                  const x2 = toPosition.x;
+                  const y2 = toPosition.y + toSize.height / 2;
                   return (
-                    <Arrow
-                      key={connector.id}
-                      points={[fromPosition.x + fromSize.width, fromPosition.y + fromSize.height / 2, toPosition.x, toPosition.y + toSize.height / 2]}
-                      stroke={selectedIds.has(connector.id) ? "#ef8c45" : "#537188"}
-                      fill={selectedIds.has(connector.id) ? "#ef8c45" : "#537188"}
-                      strokeWidth={selectedIds.has(connector.id) ? 3.5 : 2.5}
-                      pointerLength={9}
-                      pointerWidth={8}
-                      hitStrokeWidth={16}
-                      onPointerDown={(event) => selectObject(connector.id, event.evt.shiftKey)}
-                    />
+                    <Group key={connector.id} onPointerDown={(event) => selectObject(connector.id, event.evt.shiftKey)}>
+                      <Arrow
+                        points={[x1, y1, x2, y2]}
+                        stroke={selectedIds.has(connector.id) ? "#ef8c45" : "#537188"}
+                        fill={selectedIds.has(connector.id) ? "#ef8c45" : "#537188"}
+                        strokeWidth={selectedIds.has(connector.id) ? 3.5 : 2.5}
+                        pointerLength={9}
+                        pointerWidth={8}
+                        hitStrokeWidth={16}
+                      />
+                      {connector.label && (
+                        <Text
+                          x={(x1 + x2) / 2 - 80}
+                          y={(y1 + y2) / 2 - 22}
+                          width={160}
+                          text={connector.label}
+                          align="center"
+                          fontSize={12}
+                          fontFamily="Inter, sans-serif"
+                          fill={selectedIds.has(connector.id) ? "#b65e26" : "#537188"}
+                        />
+                      )}
+                    </Group>
                   );
                 })}
 
@@ -1025,6 +1107,8 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
               onResize={(nextSize) => previewSize(card.id, nextSize)}
               onResizeEnd={(nextSize) => commitSize(card.id, nextSize)}
               onEditText={(title, body) => updateTextCard(card.id, title, body)}
+              onEditEquation={(title, latex) => updateEquationCard(card.id, title, latex)}
+              onEditQuiz={(prompt, options, correctOptionId, rationale) => updateQuizCard(card.id, prompt, options, correctOptionId, rationale)}
             />
           ))}
         </div>

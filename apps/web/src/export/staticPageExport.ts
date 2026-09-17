@@ -2,6 +2,7 @@ import type { NotebookObject, StrokeObject } from "../domain/notebook";
 import type { NotebookPage } from "../domain/pages";
 import type { AssetRecord } from "../persistence/notebookDatabase";
 import { getStrokePath } from "../canvas/strokePath";
+import { learningObjectAdapter, type LearningCardObject } from "../domain/learningObjectAdapters";
 
 type Bounds = { left: number; top: number; right: number; bottom: number };
 
@@ -94,7 +95,8 @@ function textLines(text: string, x: number, y: number, width: number, options: {
   return `<text x="${x}" y="${y}" font-family="${FONT_FAMILY}" font-size="${size}" font-weight="${options.weight ?? 400}" fill="${options.fill ?? "#506064"}">${lines.map((line, index) => `<tspan x="${x}" dy="${index === 0 ? 0 : lineHeight}">${escapeXml(line)}</tspan>`).join("")}</text>`;
 }
 
-function cardSvg(object: Extract<NotebookObject, { kind: "text-card" | "equation-card" | "quiz-card" }>): string {
+function cardSvg(object: LearningCardObject): string {
+  const model = learningObjectAdapter.toExport(object);
   const background = object.kind === "quiz-card" ? "#fff8ea" : "#ffffff";
   const border = object.kind === "quiz-card" ? "#dbb986" : "#c8c3b7";
   const contentWidth = Math.max(40, object.width - CARD_PADDING * 2);
@@ -102,20 +104,20 @@ function cardSvg(object: Extract<NotebookObject, { kind: "text-card" | "equation
   const x = object.x + CARD_PADDING;
   const top = object.y + 28;
 
-  if (object.kind === "text-card") {
-    return `<g>${frame}${textLines(object.title, x, top, contentWidth, { size: 16, weight: 700, fill: "#25373b", maxLines: 2 })}${textLines(object.body, x, top + 30, contentWidth, { size: 13, maxLines: Math.max(1, Math.floor((object.height - 66) / 19)) })}</g>`;
+  if (model.kind === "text") {
+    return `<g>${frame}${textLines(model.title, x, top, contentWidth, { size: 16, weight: 700, fill: "#25373b", maxLines: 2 })}${textLines(model.body, x, top + 30, contentWidth, { size: 13, maxLines: Math.max(1, Math.floor((object.height - 66) / 19)) })}</g>`;
   }
-  if (object.kind === "equation-card") {
-    return `<g>${frame}${textLines(object.title, x, top, contentWidth, { size: 16, weight: 700, fill: "#25373b", maxLines: 2 })}<text x="${object.x + object.width / 2}" y="${object.y + object.height * 0.68}" text-anchor="middle" font-family="Georgia, serif" font-size="20" fill="#25373b">${escapeXml(object.latex)}</text></g>`;
+  if (model.kind === "equation") {
+    return `<g>${frame}${textLines(model.title, x, top, contentWidth, { size: 16, weight: 700, fill: "#25373b", maxLines: 2 })}<text x="${object.x + object.width / 2}" y="${object.y + object.height * 0.68}" text-anchor="middle" font-family="Georgia, serif" font-size="20" fill="#25373b">${escapeXml(model.latex)}</text></g>`;
   }
 
   let cursor = top;
   const parts = [`<g>${frame}<text x="${x}" y="${cursor}" font-family="${FONT_FAMILY}" font-size="10" font-weight="800" letter-spacing="1.5" fill="#9d4e26">QUICK CHECK</text>`];
   cursor += 25;
-  const promptLines = wrapText(object.prompt, Math.max(8, Math.floor(contentWidth / 8))).slice(0, 4);
+  const promptLines = wrapText(model.prompt, Math.max(8, Math.floor(contentWidth / 8))).slice(0, 4);
   parts.push(`<text x="${x}" y="${cursor}" font-family="${FONT_FAMILY}" font-size="15" font-weight="700" fill="#25373b">${promptLines.map((line, index) => `<tspan x="${x}" dy="${index === 0 ? 0 : 20}">${escapeXml(line)}</tspan>`).join("")}</text>`);
   cursor += promptLines.length * 20 + 12;
-  for (const option of object.options) {
+  for (const option of model.options) {
     if (cursor + 32 > object.y + object.height - 10) break;
     parts.push(`<rect x="${x}" y="${cursor}" width="${contentWidth}" height="30" rx="8" fill="#ffffff" stroke="#d7c6a9"/><text x="${x + 10}" y="${cursor + 20}" font-family="${FONT_FAMILY}" font-size="12" fill="#35474a">${escapeXml(option.label)}</text>`);
     cursor += 37;
@@ -169,7 +171,7 @@ export async function createStaticPageSvg(page: NotebookPage, assets: AssetRecor
     : `<rect x="${shape.x}" y="${shape.y}" width="${shape.width}" height="${shape.height}" rx="12" fill="${escapeXml(shape.fill)}" stroke="${escapeXml(shape.stroke)}" stroke-width="2"/>`).join("");
   const images = page.objects.filter((object) => object.kind === "image").map((object) => `<image x="${object.x}" y="${object.y}" width="${object.width}" height="${object.height}" href="${imageUrls.get(object.assetHash)}" preserveAspectRatio="xMidYMid meet"/><rect x="${object.x}" y="${object.y}" width="${object.width}" height="${object.height}" fill="none" stroke="rgba(44,95,93,0.35)"/>`).join("");
   const nodes = page.objects.filter((object) => object.kind === "graph-node").map((node) => `<g><rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" rx="18" fill="#e7f0ef" stroke="#2c5f5d" stroke-width="2"/>${textLines(node.label, node.x + 12, node.y + node.height / 2 + 5, node.width - 24, { size: 16, weight: 600, fill: "#163b3a", maxLines: 2 })}</g>`).join("");
-  const cards = page.objects.filter((object): object is Extract<NotebookObject, { kind: "text-card" | "equation-card" | "quiz-card" }> => object.kind === "text-card" || object.kind === "equation-card" || object.kind === "quiz-card").map(cardSvg).join("");
+  const cards = page.objects.filter((object): object is LearningCardObject => object.kind === "text-card" || object.kind === "equation-card" || object.kind === "quiz-card").map(cardSvg).join("");
   const highlighters = page.objects.filter((object): object is StrokeObject => object.kind === "stroke" && object.tool === "highlighter").map(strokeSvg).join("");
   const pens = page.objects.filter((object): object is StrokeObject => object.kind === "stroke" && object.tool === "pen").map(strokeSvg).join("");
 
