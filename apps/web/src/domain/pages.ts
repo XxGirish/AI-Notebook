@@ -12,7 +12,7 @@ export const normalizePageTitle = (title: string, fallback = "Untitled page") =>
 
 export function createNotebookPage(title: string, now = Date.now()): NotebookPage {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     id: `page-${crypto.randomUUID()}`,
     title: normalizePageTitle(title),
     width: 1280,

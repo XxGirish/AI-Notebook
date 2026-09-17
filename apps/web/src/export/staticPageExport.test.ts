@@ -3,7 +3,7 @@ import type { NotebookPage } from "../domain/pages";
 import { createStaticPageSvg, getStaticPageBounds, safeExportFilename } from "./staticPageExport";
 
 const page: NotebookPage = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   id: "page-export",
   title: "Motion & forces",
   width: 100,
@@ -33,6 +33,15 @@ describe("static page export", () => {
     expect(svg).toContain("links");
     expect(svg).toContain('fill="#123456"');
     expect(svg).not.toContain("Resize");
+  });
+
+  it("exports converted handwriting as escaped text instead of its hidden source ink", async () => {
+    const svg = await createStaticPageSvg({ ...page, objects: [
+      { id: "word", revision: 1, kind: "ink-text", x: 5, y: 5, width: 80, height: 30, text: "F < ma", fontSize: 24, color: "#183153", recognizedText: "F < ma", recognizer: "test", sourceStrokes: [page.objects[3] as never] },
+    ] }, []);
+    expect(svg).toContain(">F &lt; ma</text>");
+    expect(svg).toContain('font-size="24"');
+    expect(svg).not.toContain('fill="#123456"');
   });
 
   it("exports each diagram as a titled group with routes between facing sides", async () => {

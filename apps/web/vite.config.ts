@@ -15,7 +15,9 @@ function offlineShellPlugin(): Plugin {
         buildFingerprint.update(output.type === "chunk" ? output.code : output.source);
       }
       const version = buildFingerprint.digest("hex").slice(0, 12);
-      const precacheUrls = ["./", ...files.map((fileName) => `./${fileName}`)];
+      // The ~27 MB handwriting runtime is only needed by Pen Pro, so it is cached
+      // on first use by the fetch handler instead of downloaded with every update.
+      const precacheUrls = ["./", ...files.filter((fileName) => !fileName.endsWith(".wasm")).map((fileName) => `./${fileName}`)];
       const source = `const CACHE_PREFIX = "ai-notebook-shell-";
 const CACHE_NAME = CACHE_PREFIX + ${JSON.stringify(version)};
 const PRECACHE_URLS = ${JSON.stringify(precacheUrls)};

@@ -1,4 +1,4 @@
-import type { ConnectorObject, NotebookObject, StrokeObject } from "../domain/notebook";
+import type { ConnectorObject, InkTextObject, NotebookObject, StrokeObject } from "../domain/notebook";
 import type { NotebookPage } from "../domain/pages";
 import type { AssetRecord } from "../persistence/notebookDatabase";
 import { getStrokePath } from "../canvas/strokePath";
@@ -143,6 +143,11 @@ function strokeSvg(stroke: StrokeObject): string {
   return `<path d="${getStrokePath(stroke.points, stroke.size, stroke.tool)}" fill="${escapeXml(stroke.color)}" opacity="${opacity}"/>`;
 }
 
+function inkTextSvg(object: InkTextObject): string {
+  // Matches the canvas: one unwrapped line, vertically centred in its box.
+  return `<text x="${object.x}" y="${object.y + object.height / 2}" dominant-baseline="central" font-family="${FONT_FAMILY}" font-size="${object.fontSize}" fill="${escapeXml(object.color)}" xml:space="preserve">${escapeXml(object.text)}</text>`;
+}
+
 export async function createStaticPageSvg(page: NotebookPage, assets: AssetRecord[]): Promise<string> {
   const bounds = getStaticPageBounds(page);
   const width = bounds.right - bounds.left;
@@ -177,10 +182,11 @@ export async function createStaticPageSvg(page: NotebookPage, assets: AssetRecor
     return `<g role="group"><title>${escapeXml(diagramAdapter.toPlainText(diagram))}</title>${edges}${nodes}</g>`;
   }).join("");
   const cards = page.objects.filter((object): object is LearningCardObject => object.kind === "text-card" || object.kind === "equation-card" || object.kind === "quiz-card").map(cardSvg).join("");
+  const inkTexts = page.objects.filter((object): object is InkTextObject => object.kind === "ink-text").map(inkTextSvg).join("");
   const highlighters = page.objects.filter((object): object is StrokeObject => object.kind === "stroke" && object.tool === "highlighter").map(strokeSvg).join("");
   const pens = page.objects.filter((object): object is StrokeObject => object.kind === "stroke" && object.tool === "pen").map(strokeSvg).join("");
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${bounds.left} ${bounds.top} ${width} ${height}" role="img" aria-label="${escapeXml(page.title)}"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#537188"/></marker></defs><rect x="${bounds.left}" y="${bounds.top}" width="${width}" height="${height}" fill="#fbfaf5"/>${connectors}${shapes}${images}${diagramGroups}${cards}${highlighters}${pens}</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${bounds.left} ${bounds.top} ${width} ${height}" role="img" aria-label="${escapeXml(page.title)}"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#537188"/></marker></defs><rect x="${bounds.left}" y="${bounds.top}" width="${width}" height="${height}" fill="#fbfaf5"/>${connectors}${shapes}${images}${diagramGroups}${cards}${inkTexts}${highlighters}${pens}</svg>`;
 }
 
 export function safeExportFilename(title: string): string {

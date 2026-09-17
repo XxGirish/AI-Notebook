@@ -20,4 +20,12 @@ describe("linear reading view", () => {
     expect(items[2].text).not.toContain("Answer:");
     expect(items[1].text).toBe("Connection from Aside to quiz");
   });
+
+  it("reads converted handwriting as text in its spatial position", () => {
+    const items = buildLinearReadingItems([
+      { id: "later", revision: 1, kind: "graph-node", x: 0, y: 200, width: 100, height: 60, label: "Later" },
+      { id: "word", revision: 1, kind: "ink-text", x: 0, y: 10, width: 80, height: 30, text: "Momentum", fontSize: 24, color: "#183153", recognizedText: "Momentum", recognizer: "test", sourceStrokes: [] },
+    ]);
+    expect(items[0]).toEqual({ id: "word", text: "Momentum" });
+  });
 });
