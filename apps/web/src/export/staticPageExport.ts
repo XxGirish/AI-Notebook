@@ -1,8 +1,9 @@
-import type { NotebookObject, StrokeObject } from "../domain/notebook";
+import type { ConnectorObject, NotebookObject, StrokeObject } from "../domain/notebook";
 import type { NotebookPage } from "../domain/pages";
 import type { AssetRecord } from "../persistence/notebookDatabase";
 import { getStrokePath } from "../canvas/strokePath";
 import { learningObjectAdapter, type LearningCardObject } from "../domain/learningObjectAdapters";
+import { collectDiagrams, diagramAdapter, routeConnector, type ConnectorRoute } from "../domain/diagramAdapter";
 
 type Bounds = { left: number; top: number; right: number; bottom: number };
 
@@ -24,10 +25,7 @@ function objectBounds(object: NotebookObject, byId: Map<string, NotebookObject>)
     const from = byId.get(object.fromId);
     const to = byId.get(object.toId);
     if (!from || !to) return undefined;
-    const x1 = from.x + from.width;
-    const y1 = from.y + from.height / 2;
-    const x2 = to.x;
-    const y2 = to.y + to.height / 2;
+    const { x1, y1, x2, y2 } = routeConnector(from, to);
     return { left: Math.min(x1, x2), top: Math.min(y1, y2), right: Math.max(x1, x2), bottom: Math.max(y1, y2) };
   }
 
@@ -126,6 +124,11 @@ function cardSvg(object: LearningCardObject): string {
   return parts.join("");
 }
 
+function connectorSvg({ x1, y1, x2, y2 }: ConnectorRoute, label?: string): string {
+  const text = label ? `<text x="${(x1 + x2) / 2}" y="${(y1 + y2) / 2 - 7}" text-anchor="middle" font-family="${FONT_FAMILY}" font-size="11" fill="#537188">${escapeXml(label)}</text>` : "";
+  return `<g><line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#537188" stroke-width="2.5" marker-end="url(#arrow)"/>${text}</g>`;
+}
+
 async function blobDataUrl(blob: Blob): Promise<string> {
   const bytes = new Uint8Array(await blob.arrayBuffer());
   let binary = "";
@@ -154,28 +157,30 @@ export async function createStaticPageSvg(page: NotebookPage, assets: AssetRecor
     imageUrls.set(object.assetHash, await blobDataUrl(asset.blob));
   }
 
-  const connectors = page.objects.filter((object) => object.kind === "connector").map((connector) => {
+  const diagrams = collectDiagrams(page.objects);
+  const diagramMemberIds = new Set(diagrams.flatMap((diagram) => [...diagram.nodes, ...diagram.connectors].map((object) => object.id)));
+  const connectors = page.objects.filter((object): object is ConnectorObject => object.kind === "connector" && !diagramMemberIds.has(object.id)).map((connector) => {
     const from = byId.get(connector.fromId);
     const to = byId.get(connector.toId);
     if (!from || !to) return "";
-    const x1 = from.x + from.width;
-    const y1 = from.y + from.height / 2;
-    const x2 = to.x;
-    const y2 = to.y + to.height / 2;
-    const label = connector.label ? `<text x="${(x1 + x2) / 2}" y="${(y1 + y2) / 2 - 7}" text-anchor="middle" font-family="${FONT_FAMILY}" font-size="11" fill="#537188">${escapeXml(connector.label)}</text>` : "";
-    return `<g><line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#537188" stroke-width="2.5" marker-end="url(#arrow)"/>${label}</g>`;
+    return connectorSvg(routeConnector(from, to), connector.label);
   }).join("");
 
   const shapes = page.objects.filter((object) => object.kind === "shape").map((shape) => shape.shape === "ellipse"
     ? `<ellipse cx="${shape.x + shape.width / 2}" cy="${shape.y + shape.height / 2}" rx="${shape.width / 2}" ry="${shape.height / 2}" fill="${escapeXml(shape.fill)}" stroke="${escapeXml(shape.stroke)}" stroke-width="2"/>`
     : `<rect x="${shape.x}" y="${shape.y}" width="${shape.width}" height="${shape.height}" rx="12" fill="${escapeXml(shape.fill)}" stroke="${escapeXml(shape.stroke)}" stroke-width="2"/>`).join("");
   const images = page.objects.filter((object) => object.kind === "image").map((object) => `<image x="${object.x}" y="${object.y}" width="${object.width}" height="${object.height}" href="${imageUrls.get(object.assetHash)}" preserveAspectRatio="xMidYMid meet"/><rect x="${object.x}" y="${object.y}" width="${object.width}" height="${object.height}" fill="none" stroke="rgba(44,95,93,0.35)"/>`).join("");
-  const nodes = page.objects.filter((object) => object.kind === "graph-node").map((node) => `<g><rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" rx="18" fill="#e7f0ef" stroke="#2c5f5d" stroke-width="2"/>${textLines(node.label, node.x + 12, node.y + node.height / 2 + 5, node.width - 24, { size: 16, weight: 600, fill: "#163b3a", maxLines: 2 })}</g>`).join("");
+  const diagramGroups = diagrams.map((diagram) => {
+    const model = diagramAdapter.toExport(diagram);
+    const edges = model.edges.map((item) => connectorSvg(item.route, item.label)).join("");
+    const nodes = model.nodes.map((node) => `<g><rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" rx="18" fill="#e7f0ef" stroke="#2c5f5d" stroke-width="2"/>${textLines(node.label, node.x + 12, node.y + node.height / 2 + 5, node.width - 24, { size: 16, weight: 600, fill: "#163b3a", maxLines: 2 })}</g>`).join("");
+    return `<g role="group"><title>${escapeXml(diagramAdapter.toPlainText(diagram))}</title>${edges}${nodes}</g>`;
+  }).join("");
   const cards = page.objects.filter((object): object is LearningCardObject => object.kind === "text-card" || object.kind === "equation-card" || object.kind === "quiz-card").map(cardSvg).join("");
   const highlighters = page.objects.filter((object): object is StrokeObject => object.kind === "stroke" && object.tool === "highlighter").map(strokeSvg).join("");
   const pens = page.objects.filter((object): object is StrokeObject => object.kind === "stroke" && object.tool === "pen").map(strokeSvg).join("");
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${bounds.left} ${bounds.top} ${width} ${height}" role="img" aria-label="${escapeXml(page.title)}"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#537188"/></marker></defs><rect x="${bounds.left}" y="${bounds.top}" width="${width}" height="${height}" fill="#fbfaf5"/>${connectors}${shapes}${images}${nodes}${cards}${highlighters}${pens}</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${bounds.left} ${bounds.top} ${width} ${height}" role="img" aria-label="${escapeXml(page.title)}"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#537188"/></marker></defs><rect x="${bounds.left}" y="${bounds.top}" width="${width}" height="${height}" fill="#fbfaf5"/>${connectors}${shapes}${images}${diagramGroups}${cards}${highlighters}${pens}</svg>`;
 }
 
 export function safeExportFilename(title: string): string {

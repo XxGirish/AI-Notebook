@@ -1,4 +1,5 @@
 import type { AiTransactionRecord, NotebookObject } from "../domain/notebook";
+import { diagramAdapter } from "../domain/diagramAdapter";
 import { learningObjectAdapter } from "../domain/learningObjectAdapters";
 import { normalizePageTitle, type NotebookPage } from "../domain/pages";
 
@@ -44,6 +45,9 @@ function migrateObject(value: unknown): NotebookObject {
   };
   if (value.kind === "text-card" || value.kind === "equation-card" || value.kind === "quiz-card") {
     return learningObjectAdapter.migrate(normalized);
+  }
+  if (value.kind === "graph-node" || value.kind === "connector") {
+    return diagramAdapter.migrate(normalized);
   }
   return normalized as NotebookObject;
 }

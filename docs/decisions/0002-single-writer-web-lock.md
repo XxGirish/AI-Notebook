@@ -28,3 +28,7 @@ Treat the lock as coordination, not the final data-integrity boundary. Every pag
 Web Locks require a secure context. Production and physical-tablet access therefore require HTTPS; localhost development remains supported. Browsers without Web Locks are intentionally read-only until a tested fallback is justified.
 
 Takeover is an exceptional preemption: JavaScript already running in the displaced tab can continue briefly. Transactional revision checks are therefore mandatory and must not be removed even though normal UI coordination prevents concurrent editing. The current lock covers the whole local notebook because the application has one notebook containing multiple pages; a future multi-notebook model may use one lock per notebook ID.
+
+## Amendment — 2026-09-17
+
+A failed initial probe no longer leaves a tab read-only indefinitely. Readers, and holders displaced by a takeover, keep one abortable queued request for the same lock and become writable (after reloading stored content) once the lock is actually free, for example when the editing tab closes. Takeover and teardown abort that queued request, and a holder displaced while still hydrating cannot promote itself afterwards. This fixed a development StrictMode remount race in which the only open tab stayed read-only while no lock was held. Tests model the Web Locks queue with `ifAvailable`, `steal`, and abort signals; a two-tab Chromium check confirmed automatic promotion after the editing tab closed.

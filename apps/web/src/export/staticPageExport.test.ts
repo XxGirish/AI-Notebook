@@ -35,6 +35,17 @@ describe("static page export", () => {
     expect(svg).not.toContain("Resize");
   });
 
+  it("exports each diagram as a titled group with routes between facing sides", async () => {
+    const diagramPage: NotebookPage = { ...page, objects: [
+      { id: "top", revision: 1, kind: "graph-node", x: 0, y: 0, width: 100, height: 60, label: "Cause" },
+      { id: "bottom", revision: 1, kind: "graph-node", x: 0, y: 200, width: 100, height: 60, label: "Effect" },
+      { id: "flow", revision: 1, kind: "connector", x: 0, y: 0, width: 0, height: 0, fromId: "top", toId: "bottom", label: "leads" },
+    ] };
+    const svg = await createStaticPageSvg(diagramPage, []);
+    expect(svg).toContain('<g role="group"><title>Diagram with 2 nodes: Cause; Effect\nCause to Effect: leads</title>');
+    expect(svg).toContain('<line x1="50" y1="60" x2="50" y2="200"');
+  });
+
   it("embeds referenced binary images and rejects missing assets", async () => {
     const imagePage: NotebookPage = { ...page, objects: [{ id: "image", revision: 1, kind: "image", x: 0, y: 0, width: 20, height: 20, assetHash: "a".repeat(64), mimeType: "image/png", name: "dot.png" }] };
     await expect(createStaticPageSvg(imagePage, [])).rejects.toThrow("is missing");

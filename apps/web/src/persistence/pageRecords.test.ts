@@ -18,6 +18,18 @@ describe("persisted page records", () => {
     expect(migrated.objects[0].revision).toBe(1);
   });
 
+  it("migrates diagram objects through their adapter and rejects unknown fields", () => {
+    const base = { schemaVersion: 2, id: "page-diagram", aiTransactions: [], createdAt: 1, updatedAt: 2 };
+    const migrated = migratePersistedPage({ ...base, objects: [
+      { id: "a", revision: 1, kind: "graph-node", x: 0, y: 0, width: 10, height: 10, label: "A" },
+      { id: "edge", revision: 1, kind: "connector", x: 0, y: 0, width: 0, height: 0, fromId: "a", toId: "a", label: "" },
+    ] });
+    expect(migrated.objects[1]).not.toHaveProperty("label");
+    expect(() => migratePersistedPage({ ...base, objects: [
+      { id: "a", revision: 1, kind: "graph-node", x: 0, y: 0, width: 10, height: 10, label: "A", html: "<b>" },
+    ] })).toThrow("migration failed");
+  });
+
   it("rejects records from a newer document schema", () => {
     expect(() => migratePersistedPage({ schemaVersion: 3, id: "future", objects: [] })).toThrow(/newer/);
   });

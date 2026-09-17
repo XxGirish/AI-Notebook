@@ -17,6 +17,16 @@ npm run dev
 
 Vite prints the local URL. The development server is configured for LAN access so physical tablets can be tested on the same network; this does not provide HTTPS or production security.
 
+### AI gateway (optional)
+
+AI requests go through a small server in `apps/gateway`, never directly from the browser. It runs a deterministic mock provider by default, so no account or key is needed:
+
+```bash
+npm run dev:gateway
+```
+
+Vite proxies `/api` to the gateway on `127.0.0.1:8787`. To use your own DeepSeek account, copy `apps/gateway/.env.example` to `apps/gateway/.env`, set `AI_PROVIDER=deepseek`, `DEEPSEEK_API_KEY`, and a random `GATEWAY_ACCESS_TOKEN` of at least 32 characters, then restart the gateway. The key stays in that server file; never put it in the web app or a `VITE_` variable. Selected notebook content is sent to DeepSeek only when you run an AI action. The live DeepSeek path has not yet been verified with a real account, and the web app does not call the gateway yet. See `docs/decisions/0003-deepseek-gateway.md`.
+
 ## Checks
 
 ```bash
@@ -30,7 +40,9 @@ npm run build
 ```text
 apps/web/src/domain/       Engine-independent notebook records, validation, and history
 apps/web/src/fixtures/     Deterministic comparison input
-apps/web/src/ai/           Semantic proposal schemas, validation, layout, and atomic batches
+apps/web/src/ai/           Proposal compilation, local layout, and atomic batches
+apps/gateway/src/          Authenticated AI gateway, limits, mock and DeepSeek providers
+packages/ai-contract/src/  Shared proposal schema, gateway protocol, and mock lesson fixture
 apps/web/src/canvas/       Konva rendering and ink/input helpers
 apps/web/src/components/   Accessible HTML learning cards
 apps/web/src/export/       Document-driven static page export
