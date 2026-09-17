@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { GeneratedContentProvenance, NotebookObject } from "../domain/notebook";
-import type { CanvasProposal } from "./proposalSchema";
+import type { CanvasProposal } from "@ai-notebook/ai-contract";
+import { commitHistory, createHistory, redoHistory, undoHistory } from "../domain/history";
 import { applyCanvasBatch, CanvasBatchError, commitCanvasBatchToPage, prepareCanvasBatch } from "./proposalCompiler";
 
 const provenance: GeneratedContentProvenance = {
@@ -88,6 +89,18 @@ describe("semantic proposal compiler", () => {
     expect(applied.applied).toBe(true);
     expect(applied.objects).toContain(laterInk);
     expect(applied.objects).toHaveLength(existing.length + 2);
+  });
+
+  it("undoes one AI transaction as one step while keeping ink committed during generation", () => {
+    nextId = 0;
+    const batch = compile({ schemaVersion: 1, operations: [{ type: "insert_explanation", localId: "explain", anchor: { relation: "below_selection" }, content: { kind: "text", title: "Explanation", body: "A generated explanation." } }] });
+    const laterInk: NotebookObject = { id: "later-ink", revision: 1, kind: "stroke", tool: "pen", color: "#000", size: 4, x: 0, y: 0, width: 10, height: 10, points: [{ x: 1, y: 1, pressure: 0.5, time: 1 }] };
+    const withInk = commitHistory(createHistory(existing), [...existing, laterInk]);
+    const withLesson = commitHistory(withInk, applyCanvasBatch("page-1", withInk.present, batch, new Set()).objects);
+
+    const undone = undoHistory(withLesson);
+    expect(undone.present).toEqual([...existing, laterInk]);
+    expect(redoHistory(undone).present.map((object) => object.id)).toEqual(withLesson.present.map((object) => object.id));
   });
 
   it("is idempotent and rejects a stale update without partial insertion", () => {

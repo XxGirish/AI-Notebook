@@ -4,6 +4,7 @@ import type { KonvaEventObject } from "konva/lib/Node";
 import { commitHistory, createHistory, redoHistory, undoHistory } from "../domain/history";
 import { applyLearningObjectEdit, getFocusedDiagramObject } from "../domain/learningObjects";
 import { buildLinearReadingItems } from "../domain/linearReading";
+import { routeConnector } from "../domain/diagramAdapter";
 import type {
   AiTransactionRecord,
   ConnectorObject,
@@ -17,10 +18,9 @@ import type {
   StrokeObject,
 } from "../domain/notebook";
 import { applyCanvasBatch, prepareCanvasBatch, transactionRecordFromBatch, type PreparedCanvasBatch } from "../ai/proposalCompiler";
-import { validateCanvasProposal, type SemanticOperationType } from "../ai/proposalSchema";
+import { mockLessonProposal, validateCanvasProposal, type SemanticOperationType } from "@ai-notebook/ai-contract";
 import { LearningCard } from "../components/LearningCard";
 import { DiagramLabelEditor } from "../components/DiagramLabelEditor";
-import { mockLessonProposal } from "../fixtures/mockLessonProposal";
 import { saveAsset } from "../persistence/notebookDatabase";
 import { isQuotaExceededError } from "../persistence/storageHealth";
 import { CanvasImage } from "./CanvasImage";
@@ -926,14 +926,10 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
                   const from = connectableById.get(connector.fromId);
                   const to = connectableById.get(connector.toId);
                   if (!from || !to) return null;
-                  const fromPosition = positionFor(from);
-                  const toPosition = positionFor(to);
-                  const fromSize = sizeFor(from);
-                  const toSize = sizeFor(to);
-                  const x1 = fromPosition.x + fromSize.width;
-                  const y1 = fromPosition.y + fromSize.height / 2;
-                  const x2 = toPosition.x;
-                  const y2 = toPosition.y + toSize.height / 2;
+                  const { x1, y1, x2, y2 } = routeConnector(
+                    { ...positionFor(from), ...sizeFor(from) },
+                    { ...positionFor(to), ...sizeFor(to) },
+                  );
                   return (
                     <Group key={connector.id} onPointerDown={(event) => selectObject(connector.id, event.evt.shiftKey)}>
                       <Arrow

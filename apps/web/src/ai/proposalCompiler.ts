@@ -1,8 +1,9 @@
 import dagre from "@dagrejs/dagre";
+import { measureDiagramNode } from "../domain/diagramAdapter";
 import { learningObjectAdapter } from "../domain/learningObjectAdapters";
 import type { AiTransactionRecord, EquationCardObject, GeneratedContentProvenance, NotebookObject, QuizCardObject, TextCardObject } from "../domain/notebook";
 import type { NotebookPage } from "../domain/pages";
-import type { CanvasProposal, DiagramPayload, EquationPayload, LearningPayloadSchema, QuizPayload, SemanticOperation, TextPayload } from "./proposalSchema";
+import type { CanvasProposal, DiagramPayload, EquationPayload, LearningPayloadSchema, QuizPayload, SemanticOperation, TextPayload } from "@ai-notebook/ai-contract";
 import type { z } from "zod";
 
 type LearningPayload = z.infer<typeof LearningPayloadSchema>;
@@ -102,11 +103,10 @@ function makeDiagram(payload: DiagramPayload, allocateId: (prefix: string) => st
   const persistentIds = new Map<string, string>();
   const sizes = new Map<string, { width: number; height: number }>();
   for (const node of payload.nodes) {
-    const width = Math.max(140, Math.min(260, 88 + node.label.length * 6.4));
-    const height = node.label.length > 28 ? 84 : 68;
+    const size = measureDiagramNode(node.label);
     persistentIds.set(node.localId, allocateId("node"));
-    sizes.set(node.localId, { width, height });
-    graph.setNode(node.localId, { width, height });
+    sizes.set(node.localId, size);
+    graph.setNode(node.localId, size);
   }
   for (const edge of payload.edges) graph.setEdge(edge.from, edge.to);
   dagre.layout(graph);

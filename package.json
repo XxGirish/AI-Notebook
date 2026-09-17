@@ -3,7 +3,8 @@
   "version": "0.0.0",
   "private": true,
   "workspaces": [
-    "apps/*"
+    "apps/*",
+    "packages/*"
   ],
   "overrides": {
     "@types/react": "18.3.31",
@@ -13,8 +14,9 @@
   },
   "scripts": {
     "dev": "npm run dev --workspace @ai-notebook/web",
+    "dev:gateway": "npm run dev --workspace @ai-notebook/gateway",
     "build": "npm run build --workspace @ai-notebook/web",
-    "typecheck": "npm run typecheck --workspace @ai-notebook/web",
-    "test": "npm run test --workspace @ai-notebook/web"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
   }
 }

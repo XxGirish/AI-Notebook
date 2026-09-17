@@ -41,6 +41,9 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
   const requestUrl = new URL(request.url);
   if (requestUrl.origin !== self.location.origin) return;
+  // Gateway responses are live state (availability, capabilities, generation)
+  // and must never be served from the offline application-shell cache.
+  if (requestUrl.pathname.startsWith(new URL("./api/", self.registration.scope).pathname)) return;
 
   event.respondWith((async () => {
     const cache = await caches.open(CACHE_NAME);
@@ -71,5 +74,9 @@ export default defineConfig({
   plugins: [react(), offlineShellPlugin()],
   server: {
     host: true,
+    // Same-origin gateway access in development; the DeepSeek key stays in the gateway process.
+    proxy: {
+      "/api": { target: "http://127.0.0.1:8787" },
+    },
   },
 });
