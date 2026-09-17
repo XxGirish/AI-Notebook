@@ -20,7 +20,7 @@ type ManifestAsset = { hash: string; path: string; mimeType: string; size: numbe
 type NotebookArchiveManifest = {
   format: "ai-notebook";
   archiveVersion: 1;
-  documentSchemaVersion: 1 | 2;
+  documentSchemaVersion: 1 | 2 | 3;
   exportedAt: string;
   pages: ManifestPage[];
   assets: ManifestAsset[];
@@ -71,24 +71,43 @@ function validateBaseObject(value: Record<string, unknown>) {
   if (value.groupId !== undefined && !isString(value.groupId, 200)) fail(`object ${value.id} has an invalid group id`);
 }
 
+function validateStroke(value: Record<string, unknown>) {
+  assertOnlyKeys(value, [...BASE_OBJECT_KEYS, "tool", "color", "size", "points"], `stroke ${value.id}`);
+  if (value.tool !== "pen" && value.tool !== "highlighter") fail(`stroke ${value.id} has an invalid tool`);
+  if (!isString(value.color, 100) || !isFiniteNumber(value.size) || value.size <= 0 || !Array.isArray(value.points) || value.points.length > 100_000) {
+    fail(`stroke ${value.id} is malformed`);
+  }
+  for (const point of value.points) {
+    if (!isRecord(point) || !isFiniteNumber(point.x) || !isFiniteNumber(point.y) || !isFiniteNumber(point.pressure) || !isFiniteNumber(point.time)) {
+      fail(`stroke ${value.id} contains an invalid point`);
+    }
+    assertOnlyKeys(point, ["x", "y", "pressure", "time"], `stroke ${value.id} point`);
+  }
+}
+
 function validateObject(value: unknown): NotebookObject {
   if (!isRecord(value)) fail("a page contains a non-object entry");
   validateBaseObject(value);
 
   switch (value.kind) {
     case "stroke":
-      assertOnlyKeys(value, [...BASE_OBJECT_KEYS, "tool", "color", "size", "points"], `stroke ${value.id}`);
-      if (value.tool !== "pen" && value.tool !== "highlighter") fail(`stroke ${value.id} has an invalid tool`);
-      if (!isString(value.color, 100) || !isFiniteNumber(value.size) || value.size <= 0 || !Array.isArray(value.points) || value.points.length > 100_000) {
-        fail(`stroke ${value.id} is malformed`);
+      validateStroke(value);
+      break;
+    case "ink-text": {
+      assertOnlyKeys(value, [...BASE_OBJECT_KEYS, "text", "fontSize", "color", "recognizedText", "recognizer", "sourceStrokes"], `handwriting text ${value.id}`);
+      if (!isString(value.text, 2_000) || typeof value.recognizedText !== "string" || value.recognizedText.length > 2_000 || !isString(value.recognizer, 200) || !isString(value.color, 100)) {
+        fail(`handwriting text ${value.id} is malformed`);
       }
-      for (const point of value.points) {
-        if (!isRecord(point) || !isFiniteNumber(point.x) || !isFiniteNumber(point.y) || !isFiniteNumber(point.pressure) || !isFiniteNumber(point.time)) {
-          fail(`stroke ${value.id} contains an invalid point`);
-        }
-        assertOnlyKeys(point, ["x", "y", "pressure", "time"], `stroke ${value.id} point`);
+      if (!isFiniteNumber(value.fontSize) || value.fontSize <= 0 || value.fontSize > 1_000) fail(`handwriting text ${value.id} has an invalid font size`);
+      if (!Array.isArray(value.sourceStrokes) || value.sourceStrokes.length === 0 || value.sourceStrokes.length > 2_000) fail(`handwriting text ${value.id} has invalid source ink`);
+      for (const stroke of value.sourceStrokes) {
+        if (!isRecord(stroke)) fail(`handwriting text ${value.id} has invalid source ink`);
+        validateBaseObject(stroke);
+        if (stroke.kind !== "stroke") fail(`handwriting text ${value.id} has invalid source ink`);
+        validateStroke(stroke);
       }
       break;
+    }
     case "text-card":
       assertOnlyKeys(value, [...BASE_OBJECT_KEYS, "title", "body"], `text card ${value.id}`);
       if (!isString(value.title, 10_000) || typeof value.body !== "string" || value.body.length > 200_000) fail(`text card ${value.id} is malformed`);
@@ -220,7 +239,7 @@ function parseManifest(value: unknown): NotebookArchiveManifest {
   return {
     format: "ai-notebook",
     archiveVersion: NOTEBOOK_ARCHIVE_VERSION,
-    documentSchemaVersion: value.documentSchemaVersion as 1 | 2,
+    documentSchemaVersion: value.documentSchemaVersion as 1 | 2 | 3,
     exportedAt: value.exportedAt,
     pages,
     assets,

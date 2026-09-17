@@ -344,3 +344,4 @@ button:focus-visible { outline: 3px solid #ef8c45; outline-offset: 2px; }
   .diagram-label-editor__actions { align-self: flex-end; flex-direction: row; }
   .canvas-status span:last-child { display: none; }
 }
+.handwriting-message { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #255f5b; font-size: 0.76rem; font-weight: 650; }

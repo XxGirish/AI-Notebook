@@ -1,6 +1,6 @@
 import { strToU8, unzipSync, zipSync } from "fflate";
 import { describe, expect, it } from "vitest";
-import type { ImageObject } from "../domain/notebook";
+import type { ImageObject, InkTextObject } from "../domain/notebook";
 import { pageFromFixture } from "../domain/pages";
 import { phaseZeroFixture } from "../fixtures/phaseZeroFixture";
 import type { AssetRecord } from "./notebookDatabase";
@@ -81,6 +81,53 @@ describe(".ainotebook archives", () => {
     expect(importedTransaction.generatedObjectIds).toEqual([importedAcceleration?.id]);
   });
 
+  it("round-trips converted handwriting together with its original ink", async () => {
+    const page = pageFromFixture(phaseZeroFixture, 100);
+    page.objects.push({
+      id: "ink-text-original",
+      revision: 2,
+      kind: "ink-text",
+      x: 40,
+      y: 500,
+      width: 90,
+      height: 34,
+      text: "velocity",
+      fontSize: 28,
+      color: "#183153",
+      recognizedText: "velocty",
+      recognizer: "trocr-small-handwritten-q8@2432e24d",
+      sourceStrokes: [{ id: "stroke-source", revision: 1, kind: "stroke", tool: "pen", color: "#183153", size: 4, x: 38, y: 490, width: 96, height: 44, points: [{ x: 40, y: 500, pressure: 0.5, time: 0 }, { x: 130, y: 530, pressure: 0.6, time: 12 }] }],
+    } satisfies InkTextObject);
+
+    const imported = await readNotebookArchive(await createNotebookArchive([page], [], "2026-09-17T00:00:00.000Z"));
+    const inkText = imported.pages[0].objects.find((object) => object.kind === "ink-text");
+    expect(inkText).toMatchObject({ text: "velocity", recognizedText: "velocty", fontSize: 28, sourceStrokes: [{ points: [{ x: 40 }, { x: 130, pressure: 0.6 }] }] });
+    expect(inkText?.id).not.toBe("ink-text-original");
+  });
+
+  it("rejects converted handwriting whose preserved ink is malformed", async () => {
+    const page = pageFromFixture(phaseZeroFixture, 100);
+    const inkText: InkTextObject = {
+      id: "ink-text-original",
+      revision: 2,
+      kind: "ink-text",
+      x: 40,
+      y: 500,
+      width: 90,
+      height: 34,
+      text: "velocity",
+      fontSize: 28,
+      color: "#183153",
+      recognizedText: "velocty",
+      recognizer: "trocr-small-handwritten-q8@2432e24d",
+      sourceStrokes: [{ id: "stroke-source", revision: 1, kind: "stroke", tool: "pen", color: "#183153", size: 4, x: 38, y: 490, width: 96, height: 44, points: [{ x: 40, y: 500, pressure: 0.5, time: 0 }, { x: 130, y: 530, pressure: 0.6, time: 12 }] }],
+    } satisfies InkTextObject;
+    page.objects.push({ ...inkText, sourceStrokes: [{ ...inkText.sourceStrokes[0], points: [{ x: 1, y: Number.NaN, pressure: 0.5, time: 0 }] }] });
+    await expect(createNotebookArchive([page], [])).rejects.toThrow(/invalid point/);
+    page.objects[page.objects.length - 1] = { ...inkText, sourceStrokes: [] };
+    await expect(createNotebookArchive([page], [])).rejects.toThrow(/invalid source ink/);
+  });
+
   it("rejects a page whose bytes no longer match its manifest hash", async () => {
     const page = pageFromFixture(phaseZeroFixture, 100);
     const archive = await createNotebookArchive([page], [], "2026-09-15T00:00:00.000Z");
@@ -133,6 +180,6 @@ describe(".ainotebook archives", () => {
     };
     const archive = zipSync({ "manifest.json": strToU8(JSON.stringify(manifest)), "pages/0000.json": pageBytes });
     const imported = await readNotebookArchive(archive, 1_000, () => crypto.randomUUID());
-    expect(imported.pages[0]).toMatchObject({ schemaVersion: 2, aiTransactions: [] });
+    expect(imported.pages[0]).toMatchObject({ schemaVersion: 3, aiTransactions: [] });
   });
 });

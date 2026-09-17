@@ -40,6 +40,21 @@ export type StrokeObject = ObjectBase & {
   points: PointSample[];
 };
 
+/**
+ * Handwriting converted to typed text by the on-device recognizer. The original
+ * strokes travel with the object so the user can always return to their ink,
+ * even after reload or transfer, when recognition was wrong.
+ */
+export type InkTextObject = ObjectBase & {
+  kind: "ink-text";
+  text: string;
+  fontSize: number;
+  color: string;
+  recognizedText: string;
+  recognizer: string;
+  sourceStrokes: StrokeObject[];
+};
+
 export type TextCardObject = ObjectBase & {
   kind: "text-card";
   title: string;
@@ -93,6 +108,7 @@ export type QuizCardObject = ObjectBase & {
 
 export type NotebookObject =
   | StrokeObject
+  | InkTextObject
   | TextCardObject
   | EquationCardObject
   | GraphNodeObject
@@ -102,7 +118,7 @@ export type NotebookObject =
   | QuizCardObject;
 
 export type NotebookFixture = {
-  schemaVersion: 2;
+  schemaVersion: 3;
   id: string;
   title: string;
   width: number;
