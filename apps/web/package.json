@@ -12,7 +12,6 @@
   "dependencies": {
     "@ai-notebook/ai-contract": "0.0.0",
     "@dagrejs/dagre": "3.1.1",
-    "@huggingface/transformers": "4.3.0",
     "dexie": "^4.2.1",
     "fflate": "^0.8.3",
     "katex": "0.18.7",

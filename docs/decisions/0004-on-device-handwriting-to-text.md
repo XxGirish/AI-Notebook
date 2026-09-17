@@ -1,7 +1,7 @@
 # 0004 — Pen Pro: on-device handwriting-to-text
 
 Date: 2026-09-17
-Status: accepted; recognition quality on real handwriting and devices unverified
+Status: superseded by 0005 on 2026-09-17 (Pen Pro now neatens ink instead of recognizing text)
 
 ## Decision
 

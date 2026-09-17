@@ -1,14 +1,14 @@
-import type { InkTextObject, NotebookObject, StrokeObject } from "../../domain/notebook";
+import type { NotebookObject, StrokeObject } from "../../domain/notebook";
 
 export type InkBounds = { x: number; y: number; width: number; height: number };
-export type RecognizedLine = { sources: Array<{ id: string; revision: number }>; text: string };
 export type MeasureText = (text: string, fontSize: number) => number;
 
 export const INK_TEXT_FONT_FAMILY = "Inter, ui-sans-serif, system-ui, sans-serif";
 const MAX_TEXT_LENGTH = 500;
-const MIN_FONT_SIZE = 14;
-const MAX_FONT_SIZE = 144;
 const LINE_HEIGHT_RATIO = 1.2;
+
+// Converted-text objects were created by an earlier Pen Pro that recognized
+// handwriting; notes that contain them still load, edit and revert to ink.
 
 /** Rough width used when no canvas is available (tests, export). */
 export const estimateTextWidth: MeasureText = (text, fontSize) => Math.max(fontSize, text.length * fontSize * 0.56);
@@ -22,9 +22,9 @@ export function inkBounds(strokes: StrokeObject[]): InkBounds {
 }
 
 /**
- * Splits handwriting into text lines for a single-line recognizer. Strokes join
+ * Splits handwriting into lines so each is neatened on its own. Strokes join
  * a line when they overlap its vertical band; a large horizontal gap on the same
- * band starts a separate line so side-by-side notes are not read as one phrase.
+ * band starts a separate line so side-by-side notes are not levelled as one.
  */
 export function groupStrokesIntoLines(strokes: StrokeObject[]): StrokeObject[][] {
   type Line = { top: number; bottom: number; strokes: StrokeObject[] };
@@ -79,62 +79,6 @@ export function normalizeRecognizedText(raw: string): string {
 
 function textGeometry(text: string, fontSize: number, measureText: MeasureText) {
   return { width: Math.ceil(measureText(text, fontSize)), height: Math.ceil(fontSize * LINE_HEIGHT_RATIO) };
-}
-
-/**
- * Replaces recognized handwriting with typed text in one document update.
- * A line is skipped, leaving its ink untouched, when recognition returned
- * nothing or any source stroke was erased, moved or otherwise changed while
- * recognition was running.
- */
-export function convertRecognizedLines(
-  objects: NotebookObject[],
-  lines: RecognizedLine[],
-  options: { allocateId: (lineIndex: number) => string; measureText: MeasureText; recognizer: string },
-): { objects: NotebookObject[]; createdIds: string[] } {
-  const byId = new Map(objects.map((object) => [object.id, object]));
-  const replacementByFirstSource = new Map<string, InkTextObject>();
-  const removedIds = new Set<string>();
-
-  lines.forEach((line, lineIndex) => {
-    const text = normalizeRecognizedText(line.text);
-    if (!text || line.sources.length === 0) return;
-    const strokes: StrokeObject[] = [];
-    for (const source of line.sources) {
-      const current = byId.get(source.id);
-      if (current?.kind !== "stroke" || current.revision !== source.revision || removedIds.has(current.id)) return;
-      strokes.push(current);
-    }
-
-    const bounds = inkBounds(strokes);
-    const fontSize = Math.round(Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, bounds.height * 0.75)));
-    const geometry = textGeometry(text, fontSize, options.measureText);
-    const firstSource = objects.find((object) => strokes.some((stroke) => stroke.id === object.id))!;
-    replacementByFirstSource.set(firstSource.id, {
-      id: options.allocateId(lineIndex),
-      revision: 1,
-      kind: "ink-text",
-      x: bounds.x,
-      y: bounds.y + bounds.height / 2 - geometry.height / 2,
-      ...geometry,
-      text,
-      fontSize,
-      color: strokes[0].color,
-      recognizedText: text,
-      recognizer: options.recognizer,
-      sourceStrokes: strokes.map((stroke) => structuredClone(stroke)),
-    });
-    for (const stroke of strokes) removedIds.add(stroke.id);
-  });
-
-  if (replacementByFirstSource.size === 0) return { objects, createdIds: [] };
-  const next: NotebookObject[] = [];
-  for (const object of objects) {
-    const replacement = replacementByFirstSource.get(object.id);
-    if (replacement) next.push(replacement);
-    else if (!removedIds.has(object.id)) next.push(object);
-  }
-  return { objects: next, createdIds: [...replacementByFirstSource.values()].map((object) => object.id) };
 }
 
 export function editInkText(objects: NotebookObject[], id: string, text: string, measureText: MeasureText): NotebookObject[] {
