@@ -41,7 +41,7 @@ export type StrokeObject = ObjectBase & {
 };
 
 /**
- * Handwriting converted to typed text by the on-device recognizer. The original
+ * Handwriting converted to typed text by the earlier recognizing Pen Pro. The original
  * strokes travel with the object so the user can always return to their ink,
  * even after reload or transfer, when recognition was wrong.
  */

@@ -33,18 +33,14 @@ import { boundsFromPoints, sizeFromBottomRightHandle, type CanvasBounds } from "
 import { appendDistinctPoints, strokeIntersectsPoint } from "./strokeMath";
 import { useElementSize } from "./useElementSize";
 import {
-  convertRecognizedLines,
   editInkText,
   estimateTextWidth,
-  groupStrokesIntoLines,
   INK_TEXT_FONT_FAMILY,
   inkBounds,
   restoreHandwriting,
   type MeasureText,
 } from "./handwriting/handwritingLayout";
-import { rasterizeInkLine } from "./handwriting/rasterizeInk";
-import { recognizeHandwriting } from "./handwriting/handwritingRecognizer";
-import { HANDWRITING_RECOGNIZER_ID } from "./handwriting/recognizerProtocol";
+import { neatenHandwriting } from "./handwriting/neatenInk";
 import { wheelDeltaInPixels, wheelZoomScale, zoomCameraAt, type Camera } from "./cameraMath";
 
 type Props = {
@@ -74,7 +70,7 @@ const TOOL_LABELS: Record<Tool, string> = {
   select: "Select", lasso: "Lasso", pen: "Pen", "pen-pro": "Pen Pro", highlighter: "Highlight",
   eraser: "Eraser", rectangle: "Rectangle", ellipse: "Ellipse", pan: "Hand",
 };
-// Pen Pro converts once the writer pauses: long enough to finish a word, short enough to feel automatic.
+// Pen Pro neatens once the writer pauses: long enough to finish a word, short enough to feel automatic.
 const HANDWRITING_PAUSE_MS = 1_200;
 
 let measureContext: CanvasRenderingContext2D | null | undefined;
@@ -127,7 +123,6 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
   const [editingDiagramObjectId, setEditingDiagramObjectId] = useState<string>();
   const [erasingIds, setErasingIds] = useState<Set<string>>(() => new Set());
   const [editingInkTextId, setEditingInkTextId] = useState<string>();
-  const [convertingIds, setConvertingIds] = useState<Set<string>>(() => new Set());
   const [handwritingNotice, setHandwritingNotice] = useState<string>();
   const liveStrokeRef = useRef<PointSample[]>([]);
   const lassoPointsRef = useRef<PointSample[]>([]);
@@ -150,7 +145,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
   const shapes = objects.filter(isShape);
   const images = objects.filter(isImage);
   const inkTexts = objects.filter(isInkText);
-  // Timers and the recognizer resolve after later renders; they read the latest document here.
+  // The Pen Pro pause timer fires after later renders; it reads the latest document here.
   objectsRef.current = objects;
   readOnlyRef.current = readOnly;
   const connectors = objects.filter((object) => object.kind === "connector");
@@ -622,77 +617,34 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
     if (clearAfterMs) handwritingNoticeTimerRef.current = window.setTimeout(() => setHandwritingNotice(undefined), clearAfterMs);
   };
 
-  // Converts the Pen Pro strokes written since the last pause. They stay
-  // ordinary saved ink until recognition succeeds, so a failure, reload or an
-  // edit made in the meantime never loses handwriting.
-  const convertPendingHandwriting = async () => {
+  // Neatens the Pen Pro strokes written since the last pause. They were saved
+  // as ordinary ink first, and neatening is one more undoable step, so Undo
+  // always returns the writing exactly as it was drawn.
+  const neatenPendingHandwriting = () => {
     window.clearTimeout(handwritingTimerRef.current);
     const ids = new Set(pendingHandwritingIdsRef.current);
     pendingHandwritingIdsRef.current = [];
-    const strokesToConvert = objectsRef.current.filter((object): object is StrokeObject => object.kind === "stroke" && ids.has(object.id));
-    if (strokesToConvert.length === 0 || readOnlyRef.current) return;
-
-    const lines = groupStrokesIntoLines(strokesToConvert);
-    const lineIds = lines.map(() => `ink-text-${crypto.randomUUID()}`);
-    setConvertingIds((current) => new Set([...current, ...ids]));
-    showHandwritingNotice("Converting handwriting…");
-    try {
-      const texts = await recognizeHandwriting(
-        lines.map(rasterizeInkLine),
-        (progress) => showHandwritingNotice(`Downloading handwriting model (one time) ${Math.round(progress)}%`),
-      );
-      if (readOnlyRef.current) {
-        showHandwritingNotice(undefined);
-        return;
-      }
-      const recognized = lines.map((line, index) => ({
-        sources: line.map((stroke) => ({ id: stroke.id, revision: stroke.revision })),
-        text: texts[index] ?? "",
-      }));
-      const result = convertRecognizedLines(objectsRef.current, recognized, {
-        allocateId: (index) => lineIds[index],
-        measureText: measureInkText,
-        recognizer: HANDWRITING_RECOGNIZER_ID,
-      });
-      if (result.createdIds.length > 0) {
-        // Revalidate against the newest document at commit time; strokes erased
-        // or moved after the check above must not be replaced.
-        setHistory((current) => {
-          const latest = convertRecognizedLines(current.present, recognized, {
-            allocateId: (index) => lineIds[index],
-            measureText: measureInkText,
-            recognizer: HANDWRITING_RECOGNIZER_ID,
-          });
-          return latest.createdIds.length > 0 ? commitHistory(current, latest.objects) : current;
-        });
-      }
-      showHandwritingNotice(
-        result.createdIds.length > 0 ? "Converted to text · Undo brings your ink back" : "Couldn't read that handwriting; ink kept",
-        4_000,
-      );
-    } catch (error) {
-      showHandwritingNotice(
-        navigator.onLine ? "Handwriting conversion failed; ink kept." : "Pen Pro needs one online use to download its model; ink kept.",
-        6_000,
-      );
-      console.warn("Handwriting recognition failed", error);
-    } finally {
-      setConvertingIds((current) => {
-        const next = new Set(current);
-        for (const id of ids) next.delete(id);
-        return next;
-      });
-    }
+    if (ids.size === 0 || readOnlyRef.current) return;
+    const sources = objectsRef.current
+      .filter((object) => object.kind === "stroke" && ids.has(object.id))
+      .map((object) => ({ id: object.id, revision: object.revision }));
+    let neatened = false;
+    setHistory((current) => {
+      const result = neatenHandwriting(current.present, sources);
+      neatened = result.changedIds.length > 0;
+      return neatened ? commitHistory(current, result.objects) : current;
+    });
+    if (neatened) showHandwritingNotice("Handwriting neatened · Undo restores the original", 2_500);
   };
 
   const scheduleHandwritingConversion = () => {
     window.clearTimeout(handwritingTimerRef.current);
-    handwritingTimerRef.current = window.setTimeout(() => void convertPendingHandwriting(), HANDWRITING_PAUSE_MS);
+    handwritingTimerRef.current = window.setTimeout(neatenPendingHandwriting, HANDWRITING_PAUSE_MS);
   };
 
-  // Leaving Pen Pro converts what was written instead of waiting for the timer.
+  // Leaving Pen Pro neatens what was written instead of waiting for the timer.
   useEffect(() => {
-    if (tool !== "pen-pro" && pendingHandwritingIdsRef.current.length > 0) void convertPendingHandwriting();
+    if (tool !== "pen-pro" && pendingHandwritingIdsRef.current.length > 0) neatenPendingHandwriting();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tool]);
 
@@ -781,7 +733,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
 
     if (gestureRef.current.handwriting) {
       // Continuing the same word or line keeps collecting; starting clearly
-      // elsewhere converts what was already written instead of merging notes.
+      // elsewhere neatens what was already written as its own line.
       window.clearTimeout(handwritingTimerRef.current);
       const pendingIds = new Set(pendingHandwritingIdsRef.current);
       const pending = objectsRef.current.filter((object): object is StrokeObject => object.kind === "stroke" && pendingIds.has(object.id));
@@ -790,7 +742,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
         const margin = Math.max(48, bounds.height * 1.5);
         const nearby = startPoint.x >= bounds.x - margin && startPoint.x <= bounds.x + bounds.width + margin
           && startPoint.y >= bounds.y - margin && startPoint.y <= bounds.y + bounds.height + margin;
-        if (!nearby) void convertPendingHandwriting();
+        if (!nearby) neatenPendingHandwriting();
       }
     }
 
@@ -1386,7 +1338,6 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
                 {visibleStrokes.filter((stroke) => stroke.tool === "pen").map((stroke) => (
                   <Path
                     key={stroke.id}
-                    opacity={convertingIds.has(stroke.id) ? 0.45 : 1}
                     data={getStrokePath(stroke.points, stroke.size, stroke.tool)}
                     fill={stroke.color}
                     stroke={selectedIds.has(stroke.id) ? "#ef8c45" : undefined}
@@ -1445,7 +1396,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
         )}
 
         <div className="canvas-status" aria-live="polite">
-          <span>{tool === "eraser" ? "Whole-stroke eraser" : tool === "pen-pro" ? "Pen Pro: pause to turn writing into text" : `${TOOL_LABELS[tool]} tool`}</span>
+          <span>{tool === "eraser" ? "Whole-stroke eraser" : tool === "pen-pro" ? "Pen Pro: pause to neaten your writing" : `${TOOL_LABELS[tool]} tool`}</span>
           <span>{strokes.length} strokes</span>
           <span>{objects.length} objects</span>
           <span>Wheel: pan · Ctrl/⌘+wheel: canvas zoom</span>
