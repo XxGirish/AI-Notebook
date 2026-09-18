@@ -225,13 +225,12 @@ button { font: inherit; }
 .linear-reading-view summary { cursor: pointer; font-size: 0.82rem; font-weight: 750; }
 .linear-reading-view ol { max-height: 260px; margin: 10px 0 2px; padding-left: 24px; overflow-y: auto; }
 .linear-reading-view li, .linear-reading-view p { margin: 0 0 8px; color: #506064; font-size: 0.8rem; line-height: 1.45; white-space: pre-line; }
-.asset-message { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #536267; font-size: 0.76rem; }
 .tool-group { display: flex; align-items: center; gap: 4px; }
 .tool-group + .tool-group { padding-left: 8px; border-left: 1px solid #d8d2c6; }
-.size-control, .finger-toggle { display: flex; align-items: center; gap: 7px; min-height: 40px; padding: 0 8px; color: #536267; font-size: 0.82rem; }
+.size-control, .touch-mode { display: flex; align-items: center; gap: 7px; min-height: 40px; padding: 0 8px; color: #536267; font-size: 0.82rem; }
 .size-control input { width: 110px; accent-color: #255f5b; }
 .size-control output { min-width: 38px; color: #26383c; font-variant-numeric: tabular-nums; }
-.finger-toggle input { width: 18px; height: 18px; accent-color: #255f5b; }
+.touch-mode select { min-height: 34px; padding: 4px 6px; border: 1px solid #b9c7c5; border-radius: 8px; color: #26383c; background: white; font: inherit; font-size: 0.82rem; }
 
 .canvas-viewport {
   position: relative;
@@ -243,14 +242,39 @@ button { font: inherit; }
   box-shadow: 0 16px 45px rgba(61, 54, 42, 0.12);
 }
 
-.canvas-viewport[data-tool="pen"], .canvas-viewport[data-tool="highlighter"], .canvas-viewport[data-tool="lasso"], .canvas-viewport[data-tool="rectangle"], .canvas-viewport[data-tool="ellipse"] { cursor: crosshair; touch-action: none; }
-.canvas-viewport[data-tool="eraser"] { cursor: cell; touch-action: none; }
-.canvas-viewport[data-tool="pan"] { cursor: grab; touch-action: none; }
+/* Every tool that handles its own pointer gesture has to opt out of native
+   touch panning and zooming, otherwise the browser scrolls the page out from
+   under the writer mid-stroke. Written as :not(select) so a new tool is safe
+   by default. */
+.canvas-viewport:not([data-tool="select"]) { touch-action: none; overscroll-behavior: contain; }
+.canvas-viewport[data-tool="pen"], .canvas-viewport[data-tool="pen-pro"], .canvas-viewport[data-tool="highlighter"], .canvas-viewport[data-tool="lasso"], .canvas-viewport[data-tool="rectangle"], .canvas-viewport[data-tool="ellipse"] { cursor: crosshair; }
+.canvas-viewport[data-tool="eraser"] { cursor: cell; }
+.canvas-viewport[data-tool="pan"] { cursor: grab; }
 .canvas-viewport[data-tool="pan"]:active { cursor: grabbing; }
 .konva-stage { position: absolute !important; inset: 0; }
 .ink-stage { position: absolute !important; inset: 0; z-index: 3; }
 .card-layer { position: absolute; inset: 0; z-index: 2; pointer-events: none; transform-origin: 0 0; }
 .card-layer[aria-hidden="true"] { pointer-events: none; }
+.canvas-viewport[data-tool="text"] { cursor: text; }
+/* Above the ink stage, so the editor receives the caret, typing and selection drags. */
+.text-editor-layer { position: absolute; inset: 0; z-index: 4; pointer-events: none; transform-origin: 0 0; }
+.canvas-text-editor {
+  position: absolute;
+  box-sizing: border-box;
+  margin: 0;
+  overflow: hidden;
+  resize: none;
+  pointer-events: auto;
+  border: none;
+  border-radius: 4px;
+  outline: 1.5px dashed #537188;
+  outline-offset: 0;
+  background: rgba(255, 255, 255, 0.6);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  caret-color: #ef8c45;
+}
+.canvas-text-editor:focus-visible { outline: 2px solid #ef8c45; }
 .card-layer[aria-hidden="true"] .learning-card { pointer-events: none; }
 
 .learning-card {
@@ -326,6 +350,46 @@ button { font: inherit; }
 }
 .canvas-status span + span::before { content: "·"; margin-right: 8px; color: #a49b8c; }
 
+/* Overlaid on the canvas rather than placed in the toolbar, so a notice
+   arriving or expiring can never change the toolbar's height and resize the
+   canvas under the writer's hand. Pinned to both edges so the pill stays
+   inside the viewport on a narrow screen. */
+.canvas-toast {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  left: 12px;
+  z-index: 6;
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  pointer-events: none;
+}
+.canvas-toast p {
+  max-width: 100%;
+  margin: 0;
+  overflow: hidden;
+  padding: 7px 12px;
+  border: 1px solid rgba(155, 182, 178, 0.9);
+  border-radius: 999px;
+  color: #255f5b;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 6px 18px rgba(61, 54, 42, 0.14);
+  font-size: 0.74rem;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  animation: canvas-toast-in 140ms ease-out;
+}
+@keyframes canvas-toast-in {
+  from { opacity: 0; transform: translateY(-5px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .canvas-toast p { animation: none; }
+}
+
 button:focus-visible { outline: 3px solid #ef8c45; outline-offset: 2px; }
 
 @media (max-width: 760px) {
@@ -344,4 +408,36 @@ button:focus-visible { outline: 3px solid #ef8c45; outline-offset: 2px; }
   .diagram-label-editor__actions { align-self: flex-end; flex-direction: row; }
   .canvas-status span:last-child { display: none; }
 }
-.handwriting-message { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #255f5b; font-size: 0.76rem; font-weight: 650; }
+
+/* Confirmation dialog (native <dialog>, shown with showModal). */
+.confirm-dialog {
+  width: min(400px, calc(100vw - 32px));
+  padding: 0;
+  border: 1px solid #d8d1c3;
+  border-radius: 14px;
+  color: #1d2a2f;
+  background: #fffdf8;
+  box-shadow: 0 24px 60px rgba(40, 34, 24, 0.24), 0 2px 6px rgba(40, 34, 24, 0.08);
+}
+.confirm-dialog[open] { animation: confirm-dialog-in 160ms ease-out; }
+.confirm-dialog::backdrop { background: rgba(29, 42, 47, 0.38); backdrop-filter: blur(2px); }
+.confirm-dialog__panel { display: grid; gap: 20px; padding: 22px 22px 18px; }
+.confirm-dialog__body { display: grid; gap: 8px; }
+.confirm-dialog h2 { margin: 0; font-size: 1.05rem; font-weight: 750; }
+.confirm-dialog p { margin: 0; color: #58666a; font-size: 0.88rem; line-height: 1.45; }
+.confirm-dialog__actions { display: flex; justify-content: flex-end; gap: 8px; }
+.confirm-dialog__actions button { min-height: 38px; padding: 8px 14px; border: 1px solid #c9c1b2; border-radius: 9px; color: #3a4a4f; background: white; cursor: pointer; font-weight: 700; }
+.confirm-dialog__actions button:hover { background: #f5f2ea; }
+.confirm-dialog__actions button:focus-visible { outline: 2px solid #255f5b; outline-offset: 2px; }
+.confirm-dialog__actions .confirm-dialog__confirm { border-color: #255f5b; color: white; background: #255f5b; }
+.confirm-dialog__actions .confirm-dialog__confirm:hover { background: #1d4d4a; }
+.confirm-dialog[data-tone="danger"] .confirm-dialog__confirm { border-color: #b3412f; background: #b3412f; }
+.confirm-dialog[data-tone="danger"] .confirm-dialog__confirm:hover { background: #983526; }
+.confirm-dialog[data-tone="danger"] .confirm-dialog__confirm:focus-visible { outline-color: #b3412f; }
+@keyframes confirm-dialog-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .confirm-dialog[open] { animation: none; }
+}

@@ -9,7 +9,7 @@ const samples = (points: Array<[number, number, number?]>): PointSample[] =>
   }));
 
 export const phaseZeroFixture: NotebookFixture = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   id: "phase-zero-physics",
   title: "Forces and motion",
   width: 1280,

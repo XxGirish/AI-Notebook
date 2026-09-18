@@ -180,6 +180,6 @@ describe(".ainotebook archives", () => {
     };
     const archive = zipSync({ "manifest.json": strToU8(JSON.stringify(manifest)), "pages/0000.json": pageBytes });
     const imported = await readNotebookArchive(archive, 1_000, () => crypto.randomUUID());
-    expect(imported.pages[0]).toMatchObject({ schemaVersion: 3, aiTransactions: [] });
+    expect(imported.pages[0]).toMatchObject({ schemaVersion: 4, aiTransactions: [] });
   });
 });

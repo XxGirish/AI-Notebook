@@ -14,7 +14,7 @@ describe("persisted page records", () => {
       updatedAt: 20,
     });
 
-    expect(migrated).toMatchObject({ schemaVersion: 3, title: "Legacy notes", createdAt: 10, updatedAt: 20, aiTransactions: [] });
+    expect(migrated).toMatchObject({ schemaVersion: 4, title: "Legacy notes", createdAt: 10, updatedAt: 20, aiTransactions: [] });
     expect(migrated.objects[0].revision).toBe(1);
   });
 
@@ -36,8 +36,14 @@ describe("persisted page records", () => {
     expect(migratePersistedPage({ schemaVersion: 3, id: "new", objects: [word], aiTransactions: [] }).objects[0]).toMatchObject({ kind: "ink-text" });
   });
 
+  it("rejects canvas text in records written before schema 4", () => {
+    const text = { id: "text", revision: 1, kind: "text", x: 0, y: 0, width: 120, height: 40, text: "hi", fontSize: 20, color: "#183153" };
+    expect(() => migratePersistedPage({ schemaVersion: 3, id: "old", objects: [text], aiTransactions: [] })).toThrow(/does not support/);
+    expect(migratePersistedPage({ schemaVersion: 4, id: "new", objects: [text], aiTransactions: [] }).objects[0]).toMatchObject({ kind: "text", text: "hi" });
+  });
+
   it("rejects records from a newer document schema", () => {
-    expect(() => migratePersistedPage({ schemaVersion: 4, id: "future", objects: [] })).toThrow(/newer/);
+    expect(() => migratePersistedPage({ schemaVersion: 5, id: "future", objects: [] })).toThrow(/newer/);
   });
 
   it("swaps recovery and current pages so a restore can be undone", () => {
