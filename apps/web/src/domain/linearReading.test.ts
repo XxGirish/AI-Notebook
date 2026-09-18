@@ -28,4 +28,12 @@ describe("linear reading view", () => {
     ]);
     expect(items[0]).toEqual({ id: "word", text: "Momentum" });
   });
+
+  it("reads typed canvas text in its spatial position", () => {
+    const items = buildLinearReadingItems([
+      { id: "later", revision: 1, kind: "graph-node", x: 0, y: 200, width: 100, height: 60, label: "Later" },
+      { id: "typed", revision: 1, kind: "text", x: 0, y: 10, width: 200, height: 40, text: "Newton's laws\nFirst law", fontSize: 20, color: "#183153" },
+    ]);
+    expect(items[0]).toEqual({ id: "typed", text: "Newton's laws\nFirst law" });
+  });
 });

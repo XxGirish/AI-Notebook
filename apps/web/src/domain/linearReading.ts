@@ -25,7 +25,7 @@ export function buildLinearReadingItems(objects: NotebookObject[]): LinearReadin
       const x = from && to ? Math.min(from.x, to.x) : 0;
       const y = from && to ? Math.min(from.y, to.y) : 0;
       readable.push({ id: object.id, text: `Connection from ${readableName(from, object.fromId)} to ${readableName(to, object.toId)}${object.label ? `: ${object.label}` : ""}`, x, y });
-    } else if (object.kind === "ink-text") {
+    } else if (object.kind === "ink-text" || object.kind === "text") {
       readable.push({ id: object.id, text: object.text, x: object.x, y: object.y });
     } else if (object.kind === "image") {
       readable.push({ id: object.id, text: `Image: ${object.name}`, x: object.x, y: object.y });
@@ -43,6 +43,6 @@ function readableName(object: NotebookObject | undefined, fallback: string) {
   if (object.kind === "text-card" || object.kind === "equation-card") return object.title;
   if (object.kind === "quiz-card") return "quiz";
   if (object.kind === "image") return object.name;
-  if (object.kind === "ink-text") return object.text;
+  if (object.kind === "ink-text" || object.kind === "text") return object.text;
   return object.kind;
 }

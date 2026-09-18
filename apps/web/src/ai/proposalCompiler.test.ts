@@ -136,7 +136,7 @@ describe("semantic proposal compiler", () => {
   it("commits objects and durable transaction metadata to a page together", () => {
     nextId = 0;
     const batch = compile({ schemaVersion: 1, operations: [{ type: "insert_explanation", localId: "explain", anchor: { relation: "below_selection" }, content: { kind: "text", title: "Why", body: "Because." } }] });
-    const page = { schemaVersion: 3 as const, id: "page-1", title: "Page", width: 1280, height: 820, objects: existing, aiTransactions: [], createdAt: 1, updatedAt: 2 };
+    const page = { schemaVersion: 4 as const, id: "page-1", title: "Page", width: 1280, height: 820, objects: existing, aiTransactions: [], createdAt: 1, updatedAt: 2 };
     const committed = commitCanvasBatchToPage(page, batch, 10);
     expect(committed.objects).toHaveLength(2);
     expect(committed.aiTransactions[0]).toMatchObject({ transactionId: "transaction-1", requestId: "request-1", committedAt: 10, generatedObjectIds: batch.generatedObjectIds });

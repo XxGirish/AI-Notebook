@@ -3,7 +3,10 @@ import { diagramAdapter } from "../domain/diagramAdapter";
 import { learningObjectAdapter } from "../domain/learningObjectAdapters";
 import { normalizePageTitle, type NotebookPage } from "../domain/pages";
 
-export const CURRENT_PAGE_SCHEMA_VERSION = 3;
+export const CURRENT_PAGE_SCHEMA_VERSION = 4;
+
+// Schema 3 added converted handwriting; schema 4 added typed canvas text.
+const OBJECT_KIND_INTRODUCED_IN: Record<string, number> = { "ink-text": 3, text: 4 };
 
 export type PageRecoverySnapshot = {
   pageId: string;
@@ -76,9 +79,9 @@ export function migratePersistedPage(value: unknown): NotebookPage {
   }
   if (typeof value.id !== "string" || !value.id) throw new Error("Stored page has no id");
   if (!Array.isArray(value.objects)) throw new Error(`Stored page ${value.id} has no object list`);
-  // Schema 3 introduced converted handwriting; an older record claiming to
-  // contain it was not written by this application.
-  if (schemaVersion > 0 && schemaVersion < 3 && value.objects.some((object) => isRecord(object) && object.kind === "ink-text")) {
+  // An older record claiming to contain an object kind introduced by a later
+  // schema was not written by this application.
+  if (schemaVersion > 0 && value.objects.some((object) => isRecord(object) && typeof object.kind === "string" && schemaVersion < (OBJECT_KIND_INTRODUCED_IN[object.kind] ?? 0))) {
     throw new Error(`Stored page ${value.id} contains objects its schema does not support`);
   }
 

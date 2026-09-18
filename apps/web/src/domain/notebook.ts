@@ -55,6 +55,17 @@ export type InkTextObject = ObjectBase & {
   sourceStrokes: StrokeObject[];
 };
 
+/**
+ * Typed text placed directly on the canvas with the Text tool. The writer sets
+ * the box width; text wraps inside it and the box grows downward to fit.
+ */
+export type TextObject = ObjectBase & {
+  kind: "text";
+  text: string;
+  fontSize: number;
+  color: string;
+};
+
 export type TextCardObject = ObjectBase & {
   kind: "text-card";
   title: string;
@@ -109,6 +120,7 @@ export type QuizCardObject = ObjectBase & {
 export type NotebookObject =
   | StrokeObject
   | InkTextObject
+  | TextObject
   | TextCardObject
   | EquationCardObject
   | GraphNodeObject
@@ -118,7 +130,7 @@ export type NotebookObject =
   | QuizCardObject;
 
 export type NotebookFixture = {
-  schemaVersion: 3;
+  schemaVersion: 4;
   id: string;
   title: string;
   width: number;

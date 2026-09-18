@@ -20,7 +20,7 @@ type ManifestAsset = { hash: string; path: string; mimeType: string; size: numbe
 type NotebookArchiveManifest = {
   format: "ai-notebook";
   archiveVersion: 1;
-  documentSchemaVersion: 1 | 2 | 3;
+  documentSchemaVersion: 1 | 2 | 3 | 4;
   exportedAt: string;
   pages: ManifestPage[];
   assets: ManifestAsset[];
@@ -108,6 +108,11 @@ function validateObject(value: unknown): NotebookObject {
       }
       break;
     }
+    case "text":
+      assertOnlyKeys(value, [...BASE_OBJECT_KEYS, "text", "fontSize", "color"], `text ${value.id}`);
+      if (!isString(value.text, 10_000) || !isString(value.color, 100)) fail(`text ${value.id} is malformed`);
+      if (!isFiniteNumber(value.fontSize) || value.fontSize <= 0 || value.fontSize > 1_000) fail(`text ${value.id} has an invalid font size`);
+      break;
     case "text-card":
       assertOnlyKeys(value, [...BASE_OBJECT_KEYS, "title", "body"], `text card ${value.id}`);
       if (!isString(value.title, 10_000) || typeof value.body !== "string" || value.body.length > 200_000) fail(`text card ${value.id} is malformed`);
@@ -239,7 +244,7 @@ function parseManifest(value: unknown): NotebookArchiveManifest {
   return {
     format: "ai-notebook",
     archiveVersion: NOTEBOOK_ARCHIVE_VERSION,
-    documentSchemaVersion: value.documentSchemaVersion as 1 | 2 | 3,
+    documentSchemaVersion: value.documentSchemaVersion as 1 | 2 | 3 | 4,
     exportedAt: value.exportedAt,
     pages,
     assets,

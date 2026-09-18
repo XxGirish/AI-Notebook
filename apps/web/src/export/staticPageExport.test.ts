@@ -3,7 +3,7 @@ import type { NotebookPage } from "../domain/pages";
 import { createStaticPageSvg, getStaticPageBounds, safeExportFilename } from "./staticPageExport";
 
 const page: NotebookPage = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   id: "page-export",
   title: "Motion & forces",
   width: 100,
@@ -42,6 +42,15 @@ describe("static page export", () => {
     expect(svg).toContain(">F &lt; ma</text>");
     expect(svg).toContain('font-size="24"');
     expect(svg).not.toContain('fill="#123456"');
+  });
+
+  it("exports typed canvas text as escaped, wrapped lines", async () => {
+    const svg = await createStaticPageSvg({ ...page, objects: [
+      { id: "typed", revision: 1, kind: "text", x: 10, y: 10, width: 400, height: 40, text: "F < ma\nsecond line", fontSize: 20, color: "#183153" },
+    ] }, []);
+    expect(svg).toContain(">F &lt; ma</tspan>");
+    expect(svg).toContain(">second line</tspan>");
+    expect(svg).toContain('font-size="20"');
   });
 
   it("exports each diagram as a titled group with routes between facing sides", async () => {

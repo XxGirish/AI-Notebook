@@ -17,12 +17,15 @@ import type {
   QuizOption,
   ShapeObject,
   StrokeObject,
+  TextObject,
 } from "../domain/notebook";
 import { applyCanvasBatch, prepareCanvasBatch, transactionRecordFromBatch, type PreparedCanvasBatch } from "../ai/proposalCompiler";
 import { mockLessonProposal, validateCanvasProposal, type SemanticOperationType } from "@ai-notebook/ai-contract";
 import { LearningCard } from "../components/LearningCard";
 import { DiagramLabelEditor } from "../components/DiagramLabelEditor";
 import { InkTextEditor } from "../components/InkTextEditor";
+import { ConfirmDialog } from "../components/ConfirmDialog";
+import { CanvasTextEditor } from "../components/CanvasTextEditor";
 import { saveAsset } from "../persistence/notebookDatabase";
 import { isQuotaExceededError } from "../persistence/storageHealth";
 import { CanvasImage } from "./CanvasImage";
@@ -30,6 +33,8 @@ import { getStrokePath } from "./strokePath";
 import { expandGroupedIds, groupObjects, translateObjectGroup, ungroupObjects } from "./groupMath";
 import { objectIntersectsPolygon } from "./selectionMath";
 import { boundsFromPoints, sizeFromBottomRightHandle, type CanvasBounds } from "./shapeMath";
+import { gestureKindFor, isInkTool, pointerSamples, type TouchMode, type Tool } from "./pointerRouting";
+import { contactSize, inkingContactId, reportsContactGeometry, type Contact } from "./palmRejection";
 import { appendDistinctPoints, strokeIntersectsPoint } from "./strokeMath";
 import { useElementSize } from "./useElementSize";
 import {
@@ -41,6 +46,21 @@ import {
   type MeasureText,
 } from "./handwriting/handwritingLayout";
 import { neatenHandwriting } from "./handwriting/neatenInk";
+import {
+  createTextObject,
+  DEFAULT_TEXT_FONT_SIZE,
+  editTextObject,
+  normalizeText,
+  resizeTextBox,
+  setTextFontSize,
+  textBoxFromGesture,
+  textObjectAt,
+  TEXT_COLOR,
+  TEXT_FONT_FAMILY,
+  TEXT_FONT_SIZES,
+  TEXT_LINE_HEIGHT,
+  TEXT_PADDING,
+} from "./textBox";
 import { wheelDeltaInPixels, wheelZoomScale, zoomCameraAt, type Camera } from "./cameraMath";
 
 type Props = {
@@ -48,17 +68,28 @@ type Props = {
   readOnly?: boolean;
   onObjectsChange?: (objects: NotebookObject[], aiTransaction?: AiTransactionRecord) => void;
 };
-type Tool = "select" | "lasso" | "pen" | "pen-pro" | "highlighter" | "eraser" | "rectangle" | "ellipse" | "pan";
 type Position = { x: number; y: number };
 type Size = { width: number; height: number };
 type Gesture = {
   pointerId: number;
-  kind: "stroke" | "erase" | "pan" | "lasso" | "shape";
+  kind: "stroke" | "erase" | "pan" | "lasso" | "shape" | "text";
   lastScreen: Position;
   strokeTool?: StrokeObject["tool"];
   startWorld?: Position;
+  lastWorld?: Position;
   shapeType?: ShapeObject["shape"];
   handwriting?: boolean;
+};
+type DraftBox = CanvasBounds & { shape: ShapeObject["shape"] | "text" };
+// A text box being typed into. A new box is not in the document until it has
+// text, so an abandoned box never becomes an empty object or a history step.
+type TextEditSession = {
+  id: string;
+  isNew: boolean;
+  box: CanvasBounds;
+  fontSize: number;
+  color: string;
+  text: string;
 };
 
 const isStroke = (object: NotebookObject): object is StrokeObject => object.kind === "stroke";
@@ -66,20 +97,23 @@ const isGraphNode = (object: NotebookObject): object is GraphNodeObject => objec
 const isShape = (object: NotebookObject): object is ShapeObject => object.kind === "shape";
 const isImage = (object: NotebookObject): object is ImageObject => object.kind === "image";
 const isInkText = (object: NotebookObject): object is InkTextObject => object.kind === "ink-text";
+const isText = (object: NotebookObject): object is TextObject => object.kind === "text";
 const TOOL_LABELS: Record<Tool, string> = {
   select: "Select", lasso: "Lasso", pen: "Pen", "pen-pro": "Pen Pro", highlighter: "Highlight",
-  eraser: "Eraser", rectangle: "Rectangle", ellipse: "Ellipse", pan: "Hand",
+  eraser: "Eraser", rectangle: "Rectangle", ellipse: "Ellipse", text: "Text", pan: "Hand",
 };
 // Pen Pro neatens once the writer pauses: long enough to finish a word, short enough to feel automatic.
 const HANDWRITING_PAUSE_MS = 1_200;
 
 let measureContext: CanvasRenderingContext2D | null | undefined;
-const measureInkText: MeasureText = (text, fontSize) => {
+const canvasTextMeasure = (fontFamily: string): MeasureText => (text, fontSize) => {
   measureContext ??= document.createElement("canvas").getContext("2d");
   if (!measureContext) return estimateTextWidth(text, fontSize);
-  measureContext.font = `${fontSize}px ${INK_TEXT_FONT_FAMILY}`;
+  measureContext.font = `${fontSize}px ${fontFamily}`;
   return measureContext.measureText(text).width;
 };
+const measureInkText = canvasTextMeasure(INK_TEXT_FONT_FAMILY);
+const measureCanvasText = canvasTextMeasure(TEXT_FONT_FAMILY);
 const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
 
@@ -107,7 +141,11 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
   const [camera, setCamera] = useState<Camera>({ x: 24, y: 24, scale: 0.86 });
   const [penSize, setPenSize] = useState(4.5);
   const [highlighterSize, setHighlighterSize] = useState(22);
-  const [fingerDrawing, setFingerDrawing] = useState(false);
+  // Touch draws by default so a touch-only screen can write immediately. An
+  // active stylus switches this to "stylus" on its own the first time one is
+  // used (see beginInput); a passive stylus cannot be detected that way and
+  // needs "palm", which the writer picks themselves.
+  const [touchMode, setTouchMode] = useState<TouchMode>("finger");
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [fullscreenFallback, setFullscreenFallback] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
@@ -116,7 +154,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
   const [transientSizes, setTransientSizes] = useState<Record<string, Size>>({});
   const [liveStroke, setLiveStroke] = useState<PointSample[]>([]);
   const [lassoPoints, setLassoPoints] = useState<PointSample[]>([]);
-  const [draftShape, setDraftShape] = useState<(CanvasBounds & { shape: ShapeObject["shape"] })>();
+  const [draftShape, setDraftShape] = useState<DraftBox>();
   const [imageNotice, setImageNotice] = useState<string>();
   const [aiDraft, setAiDraft] = useState<PreparedCanvasBatch>();
   const [aiDraftError, setAiDraftError] = useState<string>();
@@ -124,11 +162,23 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
   const [erasingIds, setErasingIds] = useState<Set<string>>(() => new Set());
   const [editingInkTextId, setEditingInkTextId] = useState<string>();
   const [handwritingNotice, setHandwritingNotice] = useState<string>();
+  const [confirmingClear, setConfirmingClear] = useState(false);
+  const [newTextFontSize, setNewTextFontSize] = useState(DEFAULT_TEXT_FONT_SIZE);
+  const [textEditing, setTextEditing] = useState<TextEditSession>();
+  // Read by the window key handler, which is bound once and cannot see the current selection.
+  const editSelectedTextRef = useRef<() => boolean>(() => false);
   const liveStrokeRef = useRef<PointSample[]>([]);
   const lassoPointsRef = useRef<PointSample[]>([]);
-  const draftShapeRef = useRef<(CanvasBounds & { shape: ShapeObject["shape"] })>();
+  const draftShapeRef = useRef<DraftBox>();
   const erasingIdsRef = useRef<Set<string>>(new Set());
   const gestureRef = useRef<Gesture>();
+  const stylusSeenRef = useRef(false);
+  const touchModeChosenRef = useRef(false);
+  // Every contact currently on the glass, drawing or not: palm rejection can
+  // only pick the stylus tip if it can see what else the hand is putting down.
+  const contactsRef = useRef(new Map<number, Contact>());
+  const geometryWarnedRef = useRef(false);
+  const [activeContacts, setActiveContacts] = useState<Contact[]>([]);
   const animationFrameRef = useRef<number>();
   const lastNotifiedObjectsRef = useRef(fixture.objects);
   const pendingAiTransactionRef = useRef<AiTransactionRecord>();
@@ -145,6 +195,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
   const shapes = objects.filter(isShape);
   const images = objects.filter(isImage);
   const inkTexts = objects.filter(isInkText);
+  const texts = objects.filter(isText);
   // The Pen Pro pause timer fires after later renders; it reads the latest document here.
   objectsRef.current = objects;
   readOnlyRef.current = readOnly;
@@ -256,8 +307,10 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
         if (readOnly) return;
         event.preventDefault();
         setHistory(redoHistory);
+      } else if (!modifier && event.key === "Enter") {
+        if (editSelectedTextRef.current()) event.preventDefault();
       } else if (!modifier) {
-        const shortcut: Partial<Record<string, Tool>> = { v: "select", l: "lasso", p: "pen", w: "pen-pro", h: "highlighter", e: "eraser", r: "rectangle", o: "ellipse", " ": "pan" };
+        const shortcut: Partial<Record<string, Tool>> = { v: "select", l: "lasso", p: "pen", w: "pen-pro", h: "highlighter", e: "eraser", r: "rectangle", o: "ellipse", t: "text", " ": "pan" };
         const nextTool = shortcut[event.key.toLowerCase()];
         if (nextTool && (!readOnly || nextTool === "select" || nextTool === "pan")) {
           event.preventDefault();
@@ -396,6 +449,23 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
     setSelectedIds(new Set());
     setFocusedObjectId(undefined);
     setEditingDiagramObjectId(undefined);
+  };
+
+  // Wipes every object on the active page as one history step, so Undo brings
+  // the whole page back.
+  const clearCanvas = () => {
+    setConfirmingClear(false);
+    if (readOnly || objects.length === 0) return;
+    window.clearTimeout(handwritingTimerRef.current);
+    pendingHandwritingIdsRef.current = [];
+    commitObjects(() => []);
+    setSelectedIds(new Set());
+    setFocusedObjectId(undefined);
+    setEditingDiagramObjectId(undefined);
+    setEditingInkTextId(undefined);
+    setTextEditing(undefined);
+    setTransientPositions({});
+    setTransientSizes({});
   };
 
   const duplicateSelection = () => {
@@ -663,6 +733,53 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
     setFocusedObjectId(undefined);
   };
 
+  const startEditingText = (object: TextObject) => {
+    if (readOnly) return;
+    setSelectedIds(new Set([object.id]));
+    setFocusedObjectId(object.id);
+    setEditingDiagramObjectId(undefined);
+    setTextEditing({
+      id: object.id,
+      isNew: false,
+      box: { x: object.x, y: object.y, width: object.width, height: object.height },
+      fontSize: object.fontSize,
+      color: object.color,
+      text: object.text,
+    });
+  };
+
+  const finishTextEdit = (session: TextEditSession, text: string) => {
+    setTextEditing(undefined);
+    setTool("select");
+    if (session.isNew) {
+      const object = createTextObject(session.id, session.box, text, session.fontSize, measureCanvasText);
+      if (!object) return;
+      commitObjects((current) => [...current, object]);
+      setSelectedIds(new Set([object.id]));
+      setFocusedObjectId(object.id);
+      return;
+    }
+    commitObjects((current) => editTextObject(current, session.id, text, measureCanvasText));
+    // Clearing every character removes the box, so it can no longer be selected.
+    if (!normalizeText(text).trim()) {
+      setSelectedIds(new Set());
+      setFocusedObjectId(undefined);
+    }
+  };
+
+  const changeTextFontSize = (fontSize: number) => {
+    setNewTextFontSize(fontSize);
+    if (selectedText) commitObjects((current) => setTextFontSize(current, selectedText.id, fontSize, measureCanvasText));
+  };
+
+  const resizeTextFromHandle = (event: KonvaEventObject<DragEvent>, object: TextObject, commit: boolean) => {
+    event.cancelBubble = true;
+    const nextSize = resizeTextBox({ x: event.currentTarget.x(), y: event.currentTarget.y() }, object, measureCanvasText);
+    event.currentTarget.position({ x: nextSize.width, y: nextSize.height });
+    if (commit) commitSize(object.id, nextSize);
+    else previewSize(object.id, nextSize);
+  };
+
   const screenToWorld = (clientX: number, clientY: number, rect: DOMRect, pressure: number, time: number): PointSample => ({
     x: (clientX - rect.left - camera.x) / camera.scale,
     y: (clientY - rect.top - camera.y) / camera.scale,
@@ -701,32 +818,92 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
       nativeEvent.timeStamp,
     );
 
+  // Contacts are tracked for every pointer on the glass, not just the drawing
+  // one, and their footprint is kept as the largest seen: a palm lands small
+  // and spreads, so its first sample understates it badly.
+  const trackContact = (nativeEvent: PointerEvent) => {
+    const existing = contactsRef.current.get(nativeEvent.pointerId);
+    const size = Math.max(contactSize(nativeEvent), existing?.size ?? 0);
+    contactsRef.current.set(nativeEvent.pointerId, {
+      pointerId: nativeEvent.pointerId,
+      pointerType: nativeEvent.pointerType,
+      size,
+      startedAt: existing?.startedAt ?? nativeEvent.timeStamp,
+    });
+    setActiveContacts([...contactsRef.current.values()]);
+  };
+
+  const releaseContact = (pointerId: number) => {
+    contactsRef.current.delete(pointerId);
+    setActiveContacts([...contactsRef.current.values()]);
+  };
+
+  // Which contact is allowed to draw right now. Outside palm mode the question
+  // does not arise: whatever the writer put down is what they meant.
+  const inkingPointerId = () =>
+    touchMode === "palm" ? inkingContactId([...contactsRef.current.values()]) : undefined;
+
   const beginInput = (event: KonvaEventObject<PointerEvent>) => {
     const nativeEvent = event.evt;
-    if (gestureRef.current) return;
     const stage = event.target.getStage();
     const rect = stage?.container().getBoundingClientRect();
     if (!rect) return;
 
+    trackContact(nativeEvent);
+
+    if (touchMode === "palm" && isInkTool(tool)) {
+      // Said once, and before anything is rejected: without contact geometry
+      // this mode cannot work at all, and the writer needs to know that rather
+      // than wonder why their stylus is being ignored.
+      if (
+        !geometryWarnedRef.current
+        && contactsRef.current.size > 1
+        && !reportsContactGeometry([...contactsRef.current.values()])
+      ) {
+        geometryWarnedRef.current = true;
+        showHandwritingNotice("This screen does not report touch size · palm rejection cannot tell tip from hand", 5_000);
+      }
+      const winner = inkingPointerId();
+      // Anything that is not the chosen contact is a palm: it must not draw and
+      // must not pan either, or resting a hand would still shove the canvas.
+      if (winner !== nativeEvent.pointerId) return;
+      // The contact already drawing has just been out-voted, which means it was
+      // the hand all along. Throw its ink away rather than leaving a palm mark.
+      if (gestureRef.current && gestureRef.current.pointerId !== winner) {
+        finishInput(true, gestureRef.current.pointerId);
+      }
+    } else if (gestureRef.current) {
+      return;
+    }
+    if (gestureRef.current) return;
+
     nativeEvent.preventDefault();
-    (nativeEvent.currentTarget as HTMLCanvasElement | null)?.setPointerCapture(nativeEvent.pointerId);
-    const touchShouldPan = nativeEvent.pointerType === "touch" && !fingerDrawing && (tool === "pen" || tool === "pen-pro" || tool === "highlighter");
-    const kind: Gesture["kind"] = tool === "pan" || touchShouldPan
-      ? "pan"
-      : tool === "eraser"
-        ? "erase"
-        : tool === "lasso"
-          ? "lasso"
-          : tool === "rectangle" || tool === "ellipse"
-            ? "shape"
-            : "stroke";
+    // Konva listens on its own content element, so that is the node the capture
+    // has to go on: moves that leave the canvas must keep reaching this gesture.
+    try {
+      (nativeEvent.currentTarget as Element | null)?.setPointerCapture(nativeEvent.pointerId);
+    } catch {
+      // A pointer that already ended cannot be captured; the gesture still runs.
+    }
+
+    // The first stylus contact is what proves palm rejection is worth having.
+    // Until then finger drawing stays on, so a touch-only screen can write.
+    if (nativeEvent.pointerType === "pen" && !stylusSeenRef.current) {
+      stylusSeenRef.current = true;
+      if (!touchModeChosenRef.current && touchMode === "finger") {
+        setTouchMode("stylus");
+        showHandwritingNotice("Stylus detected · touch now pans, stylus draws", 3_000);
+      }
+    }
+
+    const kind = gestureKindFor({ tool, pointerType: nativeEvent.pointerType, touchMode });
     const startPoint = pointFromPointer(nativeEvent, rect);
     gestureRef.current = {
       pointerId: nativeEvent.pointerId,
       kind,
       lastScreen: { x: nativeEvent.clientX, y: nativeEvent.clientY },
       strokeTool: tool === "highlighter" ? "highlighter" : "pen",
-      startWorld: kind === "shape" ? startPoint : undefined,
+      startWorld: kind === "shape" || kind === "text" ? startPoint : undefined,
       shapeType: tool === "rectangle" || tool === "ellipse" ? tool : undefined,
       handwriting: tool === "pen-pro" && kind === "stroke",
     };
@@ -752,8 +929,8 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
     } else if (kind === "lasso") {
       lassoPointsRef.current = [startPoint];
       setLassoPoints([startPoint]);
-    } else if (kind === "shape") {
-      const draft = { ...boundsFromPoints(startPoint, startPoint), shape: gestureRef.current.shapeType ?? "rectangle" };
+    } else if (kind === "shape" || kind === "text") {
+      const draft: DraftBox = { ...boundsFromPoints(startPoint, startPoint), shape: kind === "text" ? "text" : gestureRef.current.shapeType ?? "rectangle" };
       draftShapeRef.current = draft;
       setDraftShape(draft);
     } else if (kind === "erase") {
@@ -762,8 +939,27 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
   };
 
   const extendInput = (event: KonvaEventObject<PointerEvent>) => {
-    const gesture = gestureRef.current;
     const nativeEvent = event.evt;
+
+    if (contactsRef.current.has(nativeEvent.pointerId)) {
+      // A resting palm keeps growing after it lands, so the footprint has to be
+      // re-read on every move: the contact that looked tip-sized a moment ago
+      // is often the hand a few samples later.
+      trackContact(nativeEvent);
+      if (touchMode === "palm" && isInkTool(tool)) {
+        const winner = inkingPointerId();
+        const drawing = gestureRef.current;
+        // No winner at all means every contact on the glass is now hand-sized,
+        // which includes the one drawing: a tip-sized contact that spreads as
+        // it settles was a knuckle or a palm edge, so its ink goes too.
+        if (drawing && winner !== drawing.pointerId) {
+          finishInput(true, drawing.pointerId);
+          return;
+        }
+      }
+    }
+
+    const gesture = gestureRef.current;
     if (!gesture || gesture.pointerId !== nativeEvent.pointerId) return;
 
     if (gesture.kind === "pan") {
@@ -777,7 +973,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
     const stage = event.target.getStage();
     const rect = stage?.container().getBoundingClientRect();
     if (!rect) return;
-    const samples = nativeEvent.getCoalescedEvents?.() ?? [nativeEvent];
+    const samples = pointerSamples(nativeEvent);
     const points = samples.map((sample) => pointFromPointer(sample, rect));
 
     if (gesture.kind === "stroke") {
@@ -786,9 +982,10 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
     } else if (gesture.kind === "lasso") {
       lassoPointsRef.current = appendDistinctPoints(lassoPointsRef.current, points, 1 / camera.scale);
       setLassoPoints([...lassoPointsRef.current]);
-    } else if (gesture.kind === "shape" && gesture.startWorld) {
-      const bounds = boundsFromPoints(gesture.startWorld, points.at(-1) ?? gesture.startWorld);
-      const draft = { ...bounds, shape: gesture.shapeType ?? "rectangle" };
+    } else if ((gesture.kind === "shape" || gesture.kind === "text") && gesture.startWorld) {
+      gesture.lastWorld = points.at(-1) ?? gesture.startWorld;
+      const bounds = boundsFromPoints(gesture.startWorld, gesture.lastWorld);
+      const draft: DraftBox = { ...bounds, shape: gesture.kind === "text" ? "text" : gesture.shapeType ?? "rectangle" };
       draftShapeRef.current = draft;
       setDraftShape(draft);
     } else {
@@ -796,9 +993,10 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
     }
   };
 
-  const finishInput = (cancelled = false) => {
+  const finishInput = (cancelled = false, pointerId?: number) => {
     const gesture = gestureRef.current;
-    if (!gesture) return;
+    // A palm lifting off must not end the stroke the stylus is still drawing.
+    if (!gesture || (pointerId !== undefined && gesture.pointerId !== pointerId)) return;
 
     if (!cancelled && gesture.kind === "stroke" && liveStrokeRef.current.length > 1) {
       const points = liveStrokeRef.current;
@@ -865,6 +1063,29 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
       setTool("select");
     }
 
+    if (!cancelled && gesture.kind === "text" && gesture.startWorld) {
+      const start = gesture.startWorld;
+      const end = gesture.lastWorld ?? start;
+      const tapThreshold = 6 / camera.scale;
+      const tapped = Math.abs(end.x - start.x) < tapThreshold && Math.abs(end.y - start.y) < tapThreshold;
+      // Tapping existing text with the Text tool edits it rather than stacking a new box on top.
+      const existing = tapped ? textObjectAt(objects, start) : undefined;
+      if (existing) {
+        startEditingText(existing);
+      } else if (!readOnly) {
+        setSelectedIds(new Set());
+        setFocusedObjectId(undefined);
+        setTextEditing({
+          id: `text-${crypto.randomUUID()}`,
+          isNew: true,
+          box: textBoxFromGesture(start, end, newTextFontSize, tapThreshold),
+          fontSize: newTextFontSize,
+          color: TEXT_COLOR,
+          text: "",
+        });
+      }
+    }
+
     gestureRef.current = undefined;
     liveStrokeRef.current = [];
     lassoPointsRef.current = [];
@@ -874,6 +1095,14 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
     setLassoPoints([]);
     setDraftShape(undefined);
     setErasingIds(new Set());
+  };
+
+  // Every contact that leaves the glass is forgotten, drawing or not, so a palm
+  // that was ignored cannot linger and keep out-voting the next stroke.
+  const endInput = (event: KonvaEventObject<PointerEvent>, cancelled: boolean) => {
+    const pointerId = event.evt.pointerId;
+    releaseContact(pointerId);
+    finishInput(cancelled, pointerId);
   };
 
   const zoomAt = (nextScale: number, anchor: Position) => {
@@ -910,6 +1139,13 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
   const selectedInkText = selectedIds.size === 1 ? inkTexts.find((inkText) => selectedIds.has(inkText.id)) : undefined;
   const inkTextBeingEdited = inkTexts.find((inkText) => inkText.id === editingInkTextId && selectedIds.has(inkText.id));
   const currentStrokeSize = currentStrokeTool === "highlighter" ? highlighterSize : penSize;
+  const selectedText = selectedIds.size === 1 ? texts.find((text) => selectedIds.has(text.id)) : undefined;
+  const textFontSizeValue = selectedText?.fontSize ?? newTextFontSize;
+  editSelectedTextRef.current = () => {
+    if (!selectedText || readOnly || textEditing) return false;
+    startEditingText(selectedText);
+    return true;
+  };
 
   return (
     <section className="prototype" ref={prototypeRef} data-fullscreen-fallback={fullscreenFallback || undefined}>
@@ -925,6 +1161,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
             ["eraser", "Eraser", "E"],
             ["rectangle", "Rectangle", "R"],
             ["ellipse", "Ellipse", "O"],
+            ["text", "Text", "T"],
             ["pan", "Hand", "Space"],
           ] as const).map(([value, label, shortcut]) => (
             <button key={value} type="button" aria-pressed={tool === value} onClick={() => setTool(value)} title={`${label} (${shortcut})`} disabled={readOnly && value !== "select" && value !== "pan"}>
@@ -933,7 +1170,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
           ))}
         </div>
 
-        {(tool === "pen" || tool === "pen-pro" || tool === "highlighter") && (
+        {isInkTool(tool) && (
           <label className="size-control">
             <span>Size</span>
             <input
@@ -948,14 +1185,45 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
           </label>
         )}
 
-        <label className="finger-toggle">
-          <input type="checkbox" checked={fingerDrawing} onChange={(event) => setFingerDrawing(event.target.checked)} disabled={readOnly} />
-          Finger draws
+        {(tool === "text" || selectedText) && (
+          <label className="touch-mode">
+            <span>Text size</span>
+            <select
+              value={textFontSizeValue}
+              onChange={(event) => changeTextFontSize(Number(event.target.value))}
+              disabled={readOnly}
+              title={selectedText ? "Size of the selected text" : "Size for new text"}
+            >
+              {TEXT_FONT_SIZES.map(({ label, value }) => <option key={value} value={value}>{label}</option>)}
+              {!TEXT_FONT_SIZES.some(({ value }) => value === textFontSizeValue) && (
+                <option value={textFontSizeValue}>{textFontSizeValue}px</option>
+              )}
+            </select>
+          </label>
+        )}
+
+        <label className="touch-mode">
+          <span>Touch</span>
+          <select
+            value={touchMode}
+            onChange={(event) => {
+              touchModeChosenRef.current = true;
+              geometryWarnedRef.current = false;
+              setTouchMode(event.target.value as TouchMode);
+            }}
+            disabled={readOnly}
+            title="How bare touch contacts are treated while inking"
+          >
+            <option value="finger">Finger draws</option>
+            <option value="palm">Palm rejection</option>
+            <option value="stylus">Stylus only</option>
+          </select>
         </label>
 
         <div className="tool-group" role="group" aria-label="History">
           <button type="button" disabled={readOnly || history.past.length === 0} onClick={() => setHistory(undoHistory)} title="Undo (Ctrl+Z)">Undo</button>
           <button type="button" disabled={readOnly || history.future.length === 0} onClick={() => setHistory(redoHistory)} title="Redo (Ctrl+Y)">Redo</button>
+          <button type="button" disabled={readOnly || objects.length === 0} onClick={() => setConfirmingClear(true)} title="Remove everything on this page">Clear all</button>
         </div>
 
         <div className="tool-group" role="group" aria-label="Insert objects">
@@ -977,9 +1245,6 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
           <button type="button" onClick={prepareMockLesson} disabled={readOnly || Boolean(aiDraft)}>Mock lesson</button>
         </div>
 
-        {imageNotice && <span className="asset-message" role="status">{imageNotice}</span>}
-        {handwritingNotice && <span className="handwriting-message" role="status">{handwritingNotice}</span>}
-
         <div className="tool-group" role="group" aria-label="Selection actions">
           <span>{selectedIds.size} selected</span>
           <button type="button" disabled={readOnly || selectedIds.size === 0} onClick={duplicateSelection}>Duplicate</button>
@@ -989,6 +1254,9 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
           <button type="button" disabled={readOnly || !selectedDiagramObject} onClick={() => setEditingDiagramObjectId(selectedDiagramObject?.id)}>Edit label</button>
           {selectedInkText && (
             <button type="button" disabled={readOnly} onClick={() => setEditingInkTextId(selectedInkText.id)}>Edit text</button>
+          )}
+          {selectedText && (
+            <button type="button" disabled={readOnly} onClick={() => startEditingText(selectedText)} title="Edit text (Enter or double-click)">Edit text</button>
           )}
         </div>
 
@@ -1001,6 +1269,16 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
           </button>
         </div>
         </div>
+
+        <ConfirmDialog
+          open={confirmingClear}
+          tone="danger"
+          title="Clear this page?"
+          message={`This removes all ${objects.length} ${objects.length === 1 ? "item" : "items"} on the page. You can bring them back with Undo (Ctrl+Z).`}
+          confirmLabel="Clear page"
+          onConfirm={clearCanvas}
+          onCancel={() => setConfirmingClear(false)}
+        />
 
         {(aiDraft || aiDraftError) && (
           <aside className="ai-draft" aria-label="AI draft preview">
@@ -1273,6 +1551,70 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
                     </Group>
                   );
                 })}
+
+                {texts.map((textObject) => {
+                  // The editor shows these words while they are being typed.
+                  if (textObject.id === textEditing?.id) return null;
+                  const position = positionFor(textObject);
+                  const dimensions = sizeFor(textObject);
+                  const selected = selectedIds.has(textObject.id);
+                  const edit = () => startEditingText(textObject);
+                  return (
+                    <Group
+                      key={textObject.id}
+                      x={position.x}
+                      y={position.y}
+                      draggable={tool === "select" && !readOnly}
+                      onPointerDown={(event) => selectObject(textObject.id, event.evt.shiftKey)}
+                      onDblClick={edit}
+                      onDblTap={edit}
+                      onDragMove={(event) => {
+                        if (event.target !== event.currentTarget) return;
+                        previewPosition(textObject.id, { x: event.currentTarget.x(), y: event.currentTarget.y() });
+                      }}
+                      onDragEnd={(event) => {
+                        if (event.target !== event.currentTarget) return;
+                        commitPosition(textObject.id, { x: event.currentTarget.x(), y: event.currentTarget.y() });
+                      }}
+                    >
+                      <Rect
+                        width={dimensions.width}
+                        height={dimensions.height}
+                        fill="rgba(255, 255, 255, 0.001)"
+                        stroke={selected ? "#ef8c45" : undefined}
+                        strokeWidth={selected ? 2 / camera.scale : 0}
+                        dash={[6 / camera.scale, 4 / camera.scale]}
+                        cornerRadius={4}
+                      />
+                      <Text
+                        text={textObject.text}
+                        width={dimensions.width}
+                        padding={TEXT_PADDING}
+                        fontSize={textObject.fontSize}
+                        fontFamily={TEXT_FONT_FAMILY}
+                        lineHeight={TEXT_LINE_HEIGHT}
+                        fill={textObject.color}
+                        wrap="word"
+                      />
+                      {selected && selectedIds.size === 1 && !readOnly && (
+                        <Circle
+                          x={dimensions.width}
+                          y={dimensions.height}
+                          radius={8 / camera.scale}
+                          fill="#ef8c45"
+                          stroke="white"
+                          strokeWidth={2 / camera.scale}
+                          draggable
+                          onPointerDown={(event) => { event.cancelBubble = true; }}
+                          onDragStart={(event) => { event.cancelBubble = true; }}
+                          onDragMove={(event) => resizeTextFromHandle(event, textObject, false)}
+                          onDragEnd={(event) => resizeTextFromHandle(event, textObject, true)}
+                          hitStrokeWidth={28 / camera.scale}
+                        />
+                      )}
+                    </Group>
+                  );
+                })}
               </Group>
             </Layer>
           </Stage>
@@ -1317,8 +1659,8 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
             style={{ pointerEvents: inputActive ? "auto" : "none" }}
             onPointerDown={beginInput}
             onPointerMove={extendInput}
-            onPointerUp={() => finishInput(false)}
-            onPointerCancel={() => finishInput(true)}
+            onPointerUp={(event) => endInput(event, false)}
+            onPointerCancel={(event) => endInput(event, true)}
           >
             <Layer listening={inputActive}>
               <Group x={camera.x} y={camera.y} scaleX={camera.scale} scaleY={camera.scale}>
@@ -1357,7 +1699,18 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
                   />
                 )}
                 {draftShape && (
-                  draftShape.shape === "ellipse" ? (
+                  draftShape.shape === "text" ? (
+                    <Rect
+                      x={draftShape.x}
+                      y={draftShape.y}
+                      width={draftShape.width}
+                      height={draftShape.height}
+                      stroke="#537188"
+                      strokeWidth={1.5 / camera.scale}
+                      dash={[6 / camera.scale, 4 / camera.scale]}
+                      cornerRadius={4}
+                    />
+                  ) : draftShape.shape === "ellipse" ? (
                     <Ellipse
                       x={draftShape.x + draftShape.width / 2}
                       y={draftShape.y + draftShape.height / 2}
@@ -1395,8 +1748,42 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
           </Stage>
         )}
 
+        {textEditing && !readOnly && (
+          <div
+            className="text-editor-layer"
+            style={{ transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.scale})` }}
+          >
+            <CanvasTextEditor
+              key={textEditing.id}
+              box={textEditing.box}
+              fontSize={textEditing.fontSize}
+              color={textEditing.color}
+              initialText={textEditing.text}
+              canvasRef={rootRef}
+              onCommit={(text) => finishTextEdit(textEditing, text)}
+            />
+          </div>
+        )}
+
+        {/* Transient notices float over the canvas. In the toolbar they reflowed
+            a wrapping flex row, which changed its height and shoved the canvas
+            down mid-stroke every time a message came and went. */}
+        <div className="canvas-toast" role="status" aria-live="polite">
+          {imageNotice && <p>{imageNotice}</p>}
+          {handwritingNotice && <p>{handwritingNotice}</p>}
+        </div>
+
         <div className="canvas-status" aria-live="polite">
-          <span>{tool === "eraser" ? "Whole-stroke eraser" : tool === "pen-pro" ? "Pen Pro: pause to neaten your writing" : `${TOOL_LABELS[tool]} tool`}</span>
+          <span>{tool === "eraser" ? "Whole-stroke eraser" : tool === "pen-pro" ? "Pen Pro: pause to neaten your writing" : tool === "text" ? "Text: click to type, or drag to size a box" : `${TOOL_LABELS[tool]} tool`}</span>
+          {touchMode === "palm" && activeContacts.length > 0 && (
+            <span>
+              {activeContacts.length === 1 ? "contact" : "contacts"}{" "}
+              {[...activeContacts]
+                .sort((a, b) => a.size - b.size)
+                .map((contact) => `${Math.round(contact.size)}px${contact.pointerId === inkingPointerId() ? " (inking)" : ""}`)
+                .join(", ")}
+            </span>
+          )}
           <span>{strokes.length} strokes</span>
           <span>{objects.length} objects</span>
           <span>Wheel: pan · Ctrl/⌘+wheel: canvas zoom</span>
