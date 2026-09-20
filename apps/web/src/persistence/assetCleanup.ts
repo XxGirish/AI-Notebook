@@ -1,23 +1,24 @@
-import type { NotebookPage } from "../domain/pages";
-import type { PageRecoverySnapshot } from "./pageRecords";
+import type { NotebookObject } from "../domain/notebook";
 
-export function referencedAssetHashes(pages: Iterable<NotebookPage>, recoveries: Iterable<PageRecoverySnapshot>): Set<string> {
+/**
+ * Asset reference counting works from loose objects rather than whole pages:
+ * stored objects are rows the database can query by kind, and recovery records
+ * hold only the objects their save changed (see pageDelta.ts).
+ */
+export function referencedAssetHashes(objectGroups: Iterable<Iterable<NotebookObject>>): Set<string> {
   const referenced = new Set<string>();
-  const collect = (page: NotebookPage) => {
-    for (const object of page.objects) {
+  for (const objects of objectGroups) {
+    for (const object of objects) {
       if (object.kind === "image") referenced.add(object.assetHash);
     }
-  };
-  for (const page of pages) collect(page);
-  for (const recovery of recoveries) collect(recovery.page);
+  }
   return referenced;
 }
 
 export function orphanAssetHashes(
-  pages: Iterable<NotebookPage>,
-  recoveries: Iterable<PageRecoverySnapshot>,
+  objectGroups: Iterable<Iterable<NotebookObject>>,
   storedHashes: Iterable<string>,
 ): string[] {
-  const referenced = referencedAssetHashes(pages, recoveries);
+  const referenced = referencedAssetHashes(objectGroups);
   return [...storedHashes].filter((hash) => !referenced.has(hash));
 }

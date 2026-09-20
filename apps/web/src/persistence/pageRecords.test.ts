@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createNotebookPage } from "../domain/pages";
-import { assertExpectedPageVersion, createRecoverySnapshot, PageWriteConflictError, migratePersistedPage, swapPageWithRecovery } from "./pageRecords";
+import { assertExpectedPageVersion, PageWriteConflictError, migratePersistedPage } from "./pageRecords";
 
 describe("persisted page records", () => {
   it("migrates the pre-versioned page shape and supplies object revisions", () => {
@@ -46,19 +46,10 @@ describe("persisted page records", () => {
     expect(() => migratePersistedPage({ schemaVersion: 5, id: "future", objects: [] })).toThrow(/newer/);
   });
 
-  it("swaps recovery and current pages so a restore can be undone", () => {
-    const older = { ...createNotebookPage("Earlier", 10), id: "page-1" };
-    const current = { ...older, title: "Current", updatedAt: 20 };
-    const swapped = swapPageWithRecovery(current, createRecoverySnapshot(older, 15), 30);
-
-    expect(swapped.restored).toMatchObject({ id: "page-1", title: "Earlier", updatedAt: 30 });
-    expect(swapped.recovery.page).toMatchObject({ id: "page-1", title: "Current", updatedAt: 20 });
-  });
-
-  it("refuses to apply a snapshot to a different page", () => {
-    const page = { ...createNotebookPage("One", 10), id: "page-1" };
-    const other = { ...createNotebookPage("Two", 10), id: "page-2" };
-    expect(() => swapPageWithRecovery(page, createRecoverySnapshot(other), 30)).toThrow(/another page/);
+  it("rejects a record that repeats an object id", () => {
+    const stroke = (id: string) => ({ id, revision: 1, kind: "stroke", tool: "pen", color: "#000", size: 3, x: 0, y: 0, width: 1, height: 1, points: [] });
+    expect(() => migratePersistedPage({ schemaVersion: 4, id: "page-1", aiTransactions: [], objects: [stroke("a"), stroke("a")] }))
+      .toThrow(/repeats object id a/);
   });
 
   it("migrates learning cards through their adapter without truncating legacy content", () => {
