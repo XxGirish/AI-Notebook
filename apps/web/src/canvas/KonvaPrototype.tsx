@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
-import { Arrow, Circle, Ellipse, Group, Layer, Line, Path, Rect, Stage, Text } from "react-konva";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { Arrow, Circle, Ellipse, Group, Layer, Line, Rect, Stage, Text } from "react-konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import { commitHistory, createHistory, redoHistory, undoHistory } from "../domain/history";
 import { applyLearningObjectEdit, getFocusedDiagramObject } from "../domain/learningObjects";
@@ -29,7 +29,9 @@ import { CanvasTextEditor } from "../components/CanvasTextEditor";
 import { saveAsset } from "../persistence/notebookDatabase";
 import { isQuotaExceededError } from "../persistence/storageHealth";
 import { CanvasImage } from "./CanvasImage";
-import { getStrokePath } from "./strokePath";
+import { InkStrokes } from "./InkStrokes";
+import { strokeWidthAt } from "./strokePath";
+import { InkTrail, limitPrediction, WetInkLayer, type WetStrokeStyle } from "./wetInk";
 import { expandGroupedIds, groupObjects, translateObjectGroup, ungroupObjects } from "./groupMath";
 import { objectIntersectsPolygon } from "./selectionMath";
 import { boundsFromPoints, sizeFromBottomRightHandle, type CanvasBounds } from "./shapeMath";
@@ -74,7 +76,11 @@ type Gesture = {
   pointerId: number;
   kind: "stroke" | "erase" | "pan" | "lasso" | "shape" | "text";
   lastScreen: Position;
+  // The canvas rect is read once per gesture: reading it on every move forces
+  // a layout whenever anything else on the page has changed.
+  rect: DOMRect;
   strokeTool?: StrokeObject["tool"];
+  strokeStyle?: WetStrokeStyle;
   startWorld?: Position;
   lastWorld?: Position;
   shapeType?: ShapeObject["shape"];
@@ -104,6 +110,12 @@ const TOOL_LABELS: Record<Tool, string> = {
 };
 // Pen Pro neatens once the writer pauses: long enough to finish a word, short enough to feel automatic.
 const HANDWRITING_PAUSE_MS = 1_200;
+const PEN_COLOR = "#183153";
+const HIGHLIGHTER_COLOR = "#f5c842";
+// Predicted samples may extend the drawn tip by at most this many screen
+// pixels: about one frame of fast writing, and small enough that a wrong guess
+// at a sharp turn in small cursive stays inside the stroke's own width.
+const MAX_PREDICTION_PX = 8;
 
 let measureContext: CanvasRenderingContext2D | null | undefined;
 const canvasTextMeasure = (fontFamily: string): MeasureText => (text, fontSize) => {
@@ -152,7 +164,6 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
   const [focusedObjectId, setFocusedObjectId] = useState<string>();
   const [transientPositions, setTransientPositions] = useState<Record<string, Position>>({});
   const [transientSizes, setTransientSizes] = useState<Record<string, Size>>({});
-  const [liveStroke, setLiveStroke] = useState<PointSample[]>([]);
   const [lassoPoints, setLassoPoints] = useState<PointSample[]>([]);
   const [draftShape, setDraftShape] = useState<DraftBox>();
   const [imageNotice, setImageNotice] = useState<string>();
@@ -179,7 +190,10 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
   const contactsRef = useRef(new Map<number, Contact>());
   const geometryWarnedRef = useRef(false);
   const [activeContacts, setActiveContacts] = useState<Contact[]>([]);
-  const animationFrameRef = useRef<number>();
+  const publishedContactsRef = useRef("");
+  const wetCanvasRef = useRef<HTMLCanvasElement>(null);
+  const wetInkRef = useRef<WetInkLayer>();
+  const inkTrailRef = useRef(new InkTrail(() => wetCanvasRef.current));
   const lastNotifiedObjectsRef = useRef(fixture.objects);
   const pendingAiTransactionRef = useRef<AiTransactionRecord>();
   const committedAiTransactionIdsRef = useRef(new Set(fixture.aiTransactions.map((transaction) => transaction.transactionId)));
@@ -208,10 +222,36 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
   const linearReadingItems = useMemo(() => buildLinearReadingItems(objects), [objects]);
 
   useEffect(() => () => {
-    if (animationFrameRef.current !== undefined) cancelAnimationFrame(animationFrameRef.current);
     window.clearTimeout(handwritingTimerRef.current);
     window.clearTimeout(handwritingNoticeTimerRef.current);
   }, []);
+
+  useEffect(() => {
+    const canvas = wetCanvasRef.current;
+    if (!canvas) return;
+    const layer = new WetInkLayer(canvas);
+    wetInkRef.current = layer;
+    return () => {
+      layer.dispose();
+      if (wetInkRef.current === layer) wetInkRef.current = undefined;
+    };
+  }, []);
+
+  useEffect(() => {
+    wetInkRef.current?.resize(size.width, size.height, window.devicePixelRatio || 1);
+  }, [size.width, size.height]);
+
+  useEffect(() => {
+    wetInkRef.current?.setCamera(camera);
+  }, [camera]);
+
+  // A finished stroke's wet copy goes once the committed one is on the Konva
+  // layer. Layout effect: its frame must be requested after the one Konva asked
+  // for while rendering this commit, so both happen in the same frame.
+  useLayoutEffect(() => {
+    const committed = new Set(objects.map((object) => object.id));
+    wetInkRef.current?.release((id) => committed.has(id));
+  }, [objects]);
 
   useEffect(() => {
     if (readOnly) {
@@ -787,12 +827,33 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
     time,
   });
 
-  const scheduleLiveStrokeRender = () => {
-    if (animationFrameRef.current !== undefined) return;
-    animationFrameRef.current = requestAnimationFrame(() => {
-      animationFrameRef.current = undefined;
-      setLiveStroke([...liveStrokeRef.current]);
-    });
+  const strokeStyleFor = (strokeTool: StrokeObject["tool"]): WetStrokeStyle => strokeTool === "highlighter"
+    ? { tool: "highlighter", color: HIGHLIGHTER_COLOR, size: highlighterSize, opacity: 0.3 }
+    : { tool: "pen", color: PEN_COLOR, size: penSize, opacity: 1 };
+
+  // Draws the stroke under the pen straight away, outside React (see wetInk.ts).
+  // Where the OS can draw the delegated ink trail it covers the gap to the pen
+  // exactly; otherwise the browser's predicted samples stand in for it.
+  const drawWetStroke = (gesture: Gesture, nativeEvent?: PointerEvent) => {
+    const layer = wetInkRef.current;
+    const style = gesture.strokeStyle;
+    const points = liveStrokeRef.current;
+    const tip = points.at(-1);
+    if (!layer || !style || !tip) return;
+
+    const trail = inkTrailRef.current;
+    if (nativeEvent && style.tool === "pen" && trail.active) {
+      layer.update(style, points);
+      trail.update(nativeEvent, { color: style.color, diameter: strokeWidthAt(style.size, tip.pressure, style.tool) * camera.scale });
+      return;
+    }
+    const predicted = nativeEvent?.getPredictedEvents?.() ?? [];
+    const ahead = limitPrediction(
+      tip,
+      predicted.map((sample) => ({ ...pointFromPointer(sample, gesture.rect), pressure: tip.pressure })),
+      MAX_PREDICTION_PX / camera.scale,
+    );
+    layer.update(style, points, ahead);
   };
 
   const eraseAt = (point: PointSample) => {
@@ -830,12 +891,22 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
       size,
       startedAt: existing?.startedAt ?? nativeEvent.timeStamp,
     });
-    setActiveContacts([...contactsRef.current.values()]);
+    // Only palm mode shows the contacts. Publishing them on every move made each
+    // pen sample re-render the whole canvas, which was most of the ink latency.
+    if (touchMode === "palm") publishContacts();
   };
 
   const releaseContact = (pointerId: number) => {
     contactsRef.current.delete(pointerId);
-    setActiveContacts([...contactsRef.current.values()]);
+    publishContacts();
+  };
+
+  const publishContacts = () => {
+    const contacts = [...contactsRef.current.values()];
+    const signature = contacts.map((contact) => `${contact.pointerId}:${Math.round(contact.size)}`).sort().join(",");
+    if (signature === publishedContactsRef.current) return;
+    publishedContactsRef.current = signature;
+    setActiveContacts(contacts);
   };
 
   // Which contact is allowed to draw right now. Outside palm mode the question
@@ -898,11 +969,14 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
 
     const kind = gestureKindFor({ tool, pointerType: nativeEvent.pointerType, touchMode });
     const startPoint = pointFromPointer(nativeEvent, rect);
+    const strokeTool = tool === "highlighter" ? "highlighter" : "pen";
     gestureRef.current = {
       pointerId: nativeEvent.pointerId,
       kind,
       lastScreen: { x: nativeEvent.clientX, y: nativeEvent.clientY },
-      strokeTool: tool === "highlighter" ? "highlighter" : "pen",
+      rect,
+      strokeTool,
+      strokeStyle: kind === "stroke" ? strokeStyleFor(strokeTool) : undefined,
       startWorld: kind === "shape" || kind === "text" ? startPoint : undefined,
       shapeType: tool === "rectangle" || tool === "ellipse" ? tool : undefined,
       handwriting: tool === "pen-pro" && kind === "stroke",
@@ -924,8 +998,9 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
     }
 
     if (kind === "stroke") {
-      liveStrokeRef.current = [pointFromPointer(nativeEvent, rect)];
-      scheduleLiveStrokeRender();
+      liveStrokeRef.current = [startPoint];
+      inkTrailRef.current.prepare();
+      drawWetStroke(gestureRef.current);
     } else if (kind === "lasso") {
       lassoPointsRef.current = [startPoint];
       setLassoPoints([startPoint]);
@@ -970,15 +1045,12 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
       return;
     }
 
-    const stage = event.target.getStage();
-    const rect = stage?.container().getBoundingClientRect();
-    if (!rect) return;
     const samples = pointerSamples(nativeEvent);
-    const points = samples.map((sample) => pointFromPointer(sample, rect));
+    const points = samples.map((sample) => pointFromPointer(sample, gesture.rect));
 
     if (gesture.kind === "stroke") {
       liveStrokeRef.current = appendDistinctPoints(liveStrokeRef.current, points, 0.35 / camera.scale);
-      scheduleLiveStrokeRender();
+      drawWetStroke(gesture, nativeEvent);
     } else if (gesture.kind === "lasso") {
       lassoPointsRef.current = appendDistinctPoints(lassoPointsRef.current, points, 1 / camera.scale);
       setLassoPoints([...lassoPointsRef.current]);
@@ -998,10 +1070,12 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
     // A palm lifting off must not end the stroke the stylus is still drawing.
     if (!gesture || (pointerId !== undefined && gesture.pointerId !== pointerId)) return;
 
-    if (!cancelled && gesture.kind === "stroke" && liveStrokeRef.current.length > 1) {
+    // A single sample is a tap: the dot of an i or j, a full stop. It is ink too.
+    if (!cancelled && gesture.kind === "stroke" && gesture.strokeStyle && liveStrokeRef.current.length > 0 && !readOnly) {
       const points = liveStrokeRef.current;
-      const strokeTool = gesture.strokeTool ?? "pen";
-      const strokeSize = strokeTool === "highlighter" ? highlighterSize : penSize;
+      const style = gesture.strokeStyle;
+      const strokeTool = style.tool;
+      const strokeSize = style.size;
       const padding = strokeSize / 2;
       const xs = points.map((point) => point.x);
       const ys = points.map((point) => point.y);
@@ -1010,7 +1084,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
         revision: 1,
         kind: "stroke",
         tool: strokeTool,
-        color: strokeTool === "highlighter" ? "#f5c842" : "#183153",
+        color: style.color,
         size: strokeSize,
         x: Math.min(...xs) - padding,
         y: Math.min(...ys) - padding,
@@ -1019,7 +1093,10 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
         points,
       };
       commitObjects((current) => [...current, stroke]);
-      if (gesture.handwriting && !readOnly) pendingHandwritingIdsRef.current.push(stroke.id);
+      wetInkRef.current?.settle(stroke.id, style, points);
+      if (gesture.handwriting) pendingHandwritingIdsRef.current.push(stroke.id);
+    } else if (gesture.kind === "stroke") {
+      wetInkRef.current?.discard();
     }
     if (gesture.handwriting && pendingHandwritingIdsRef.current.length > 0) scheduleHandwritingConversion();
 
@@ -1091,7 +1168,6 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
     lassoPointsRef.current = [];
     draftShapeRef.current = undefined;
     erasingIdsRef.current = new Set();
-    setLiveStroke([]);
     setLassoPoints([]);
     setDraftShape(undefined);
     setErasingIds(new Set());
@@ -1134,7 +1210,11 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
 
   const resetCamera = () => setCamera({ x: 24, y: 24, scale: 0.86 });
   const inputActive = tool !== "select" && (!readOnly || tool === "pan");
-  const visibleStrokes = strokes.filter((stroke) => !erasingIds.has(stroke.id));
+  // Memoized so the stroke layer's props stay equal while nothing about strokes changes.
+  const visibleStrokes = useMemo(
+    () => objects.filter((object): object is StrokeObject => object.kind === "stroke" && !erasingIds.has(object.id)),
+    [objects, erasingIds],
+  );
   const currentStrokeTool = tool === "highlighter" ? "highlighter" : "pen";
   const selectedInkText = selectedIds.size === 1 ? inkTexts.find((inkText) => selectedIds.has(inkText.id)) : undefined;
   const inkTextBeingEdited = inkTexts.find((inkText) => inkText.id === editingInkTextId && selectedIds.has(inkText.id));
@@ -1662,32 +1742,12 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
             onPointerUp={(event) => endInput(event, false)}
             onPointerCancel={(event) => endInput(event, true)}
           >
-            <Layer listening={inputActive}>
+            {/* Nothing on this stage has handlers of its own; every gesture is
+                handled at stage level. A listening layer would redraw a hit
+                canvas each frame and read a pixel back from it on every move. */}
+            <Layer listening={false}>
               <Group x={camera.x} y={camera.y} scaleX={camera.scale} scaleY={camera.scale}>
-                {visibleStrokes.filter((stroke) => stroke.tool === "highlighter").map((stroke) => (
-                  <Path
-                    key={stroke.id}
-                    data={getStrokePath(stroke.points, stroke.size, stroke.tool)}
-                    fill={stroke.color}
-                    opacity={0.3}
-                    globalCompositeOperation="multiply"
-                    stroke={selectedIds.has(stroke.id) ? "#ef8c45" : undefined}
-                    strokeWidth={selectedIds.has(stroke.id) ? 2 / camera.scale : 0}
-                    x={positionFor(stroke).x - stroke.x}
-                    y={positionFor(stroke).y - stroke.y}
-                  />
-                ))}
-                {visibleStrokes.filter((stroke) => stroke.tool === "pen").map((stroke) => (
-                  <Path
-                    key={stroke.id}
-                    data={getStrokePath(stroke.points, stroke.size, stroke.tool)}
-                    fill={stroke.color}
-                    stroke={selectedIds.has(stroke.id) ? "#ef8c45" : undefined}
-                    strokeWidth={selectedIds.has(stroke.id) ? 2 / camera.scale : 0}
-                    x={positionFor(stroke).x - stroke.x}
-                    y={positionFor(stroke).y - stroke.y}
-                  />
-                ))}
+                <InkStrokes strokes={visibleStrokes} selectedIds={selectedIds} transientPositions={transientPositions} cameraScale={camera.scale} />
                 {lassoPoints.length > 1 && (
                   <Line
                     points={lassoPoints.flatMap((point) => [point.x, point.y])}
@@ -1735,18 +1795,12 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
                     />
                   )
                 )}
-                {liveStroke.length > 1 && (
-                  <Path
-                    data={getStrokePath(liveStroke, currentStrokeSize, currentStrokeTool)}
-                    fill={currentStrokeTool === "highlighter" ? "#f5c842" : "#183153"}
-                    opacity={currentStrokeTool === "highlighter" ? 0.3 : 1}
-                    globalCompositeOperation={currentStrokeTool === "highlighter" ? "multiply" : "source-over"}
-                  />
-                )}
               </Group>
             </Layer>
           </Stage>
         )}
+
+        <canvas ref={wetCanvasRef} className="wet-ink-layer" aria-hidden="true" />
 
         {textEditing && !readOnly && (
           <div
