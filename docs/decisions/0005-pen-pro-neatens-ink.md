@@ -3,6 +3,7 @@
 Date: 2026-09-17
 Status: accepted; feel on real handwriting and pen devices unverified
 Supersedes: 0004 (on-device handwriting-to-text)
+Amended by: 0007 — neatening now works per word (baseline, size, slant, spacing, tilt) and uses non-shrinking smoothing; the algorithm below is the original 2026-09-17 version.
 
 ## Decision
 
