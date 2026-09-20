@@ -1,13 +1,22 @@
-import Dexie, { type EntityTable } from "dexie";
+import Dexie, { type EntityTable, type Table, type Transaction } from "dexie";
+import type { NotebookObject } from "../domain/notebook";
 import type { NotebookPage } from "../domain/pages";
 import { orphanAssetHashes } from "./assetCleanup";
 import {
-  assertExpectedPageVersion,
-  createRecoverySnapshot,
-  migratePersistedPage,
-  swapPageWithRecovery,
-  type PageRecoverySnapshot,
-} from "./pageRecords";
+  applyRecoveryPatch,
+  assemblePage,
+  diffPageObjects,
+  objectMapOf,
+  recoveredObjects,
+  recoveryPatchFor,
+  splitPage,
+  type PageMetadataRecord,
+  type PageObjectKey,
+  type PageObjectRecord,
+  type PageObjectWrites,
+  type PageRecoveryPatch,
+} from "./pageDelta";
+import { assertExpectedPageVersion, migratePersistedPage } from "./pageRecords";
 
 export type AssetRecord = {
   hash: string;
@@ -18,12 +27,13 @@ export type AssetRecord = {
 };
 
 class NotebookDatabase extends Dexie {
-  pages!: EntityTable<NotebookPage, "id">;
-  recoverySnapshots!: EntityTable<PageRecoverySnapshot, "pageId">;
+  pages!: EntityTable<PageMetadataRecord, "id">;
+  pageObjects!: Table<PageObjectRecord, PageObjectKey>;
+  recoverySnapshots!: EntityTable<PageRecoveryPatch, "pageId">;
   assets!: EntityTable<AssetRecord, "hash">;
 
-  constructor() {
-    super("ai-notebook");
+  constructor(name = "ai-notebook") {
+    super(name);
     this.version(1).stores({ pages: "id, createdAt, updatedAt" });
     this.version(2).stores({
       pages: "id, createdAt, updatedAt",
@@ -40,15 +50,94 @@ class NotebookDatabase extends Dexie {
       recoverySnapshots: "pageId, capturedAt",
       assets: "hash, createdAt",
     });
+    // Version 4 moves objects out of the page row into one row each, so a save
+    // writes only what changed. The document schema is unaffected: archives
+    // still carry whole pages.
+    this.version(4).stores({
+      pages: "id, createdAt, updatedAt",
+      pageObjects: "[pageId+objectId], pageId, kind",
+      recoverySnapshots: "pageId, capturedAt",
+      assets: "hash, createdAt",
+    }).upgrade(splitStoredPages);
+  }
+}
+
+/**
+ * Rewrites every whole-page record as metadata plus object rows, and every
+ * recovery snapshot as a patch covering all of its objects. Throwing aborts the
+ * upgrade rather than leaving a notebook half converted.
+ */
+async function splitStoredPages(transaction: Transaction): Promise<void> {
+  const pagesTable = transaction.table("pages");
+  const objectsTable = transaction.table("pageObjects");
+  const recoveryTable = transaction.table("recoverySnapshots");
+
+  for (const record of await pagesTable.toArray()) {
+    const { metadata, objects } = splitPage(migratePersistedPage(record));
+    await objectsTable.bulkPut(objects);
+    await pagesTable.put(metadata);
+  }
+
+  for (const record of await recoveryTable.toArray()) {
+    const { metadata, objects } = splitPage(migratePersistedPage(record.page));
+    const patched: Record<string, NotebookObject | null> = {};
+    for (const row of objects) patched[row.objectId] = row.object;
+    const current = await pagesTable.get(record.pageId) as PageMetadataRecord | undefined;
+    for (const objectId of current?.objectIds ?? []) {
+      if (!(objectId in patched)) patched[objectId] = null;
+    }
+    await recoveryTable.put({
+      pageId: record.pageId,
+      capturedAt: typeof record.capturedAt === "number" ? record.capturedAt : Date.now(),
+      metadata,
+      objects: patched,
+    });
   }
 }
 
 const database = new NotebookDatabase();
 const saveTails = new Map<string, Promise<void>>();
 
+/**
+ * What this tab last handed the database for each page, by object identity. It
+ * is the starting point of the next diff, so an ordinary save never reads the
+ * page back. It is dropped whenever a write fails or another tab wins a
+ * conflict, and the next save then reads the stored objects instead.
+ */
+const savedObjects = new Map<string, Map<string, NotebookObject>>();
+
+function rememberSavedObjects(page: NotebookPage): void {
+  savedObjects.set(page.id, objectMapOf(page.objects));
+}
+
+async function storedObjectMap(pageId: string): Promise<Map<string, NotebookObject>> {
+  const rows = await database.pageObjects.where("pageId").equals(pageId).toArray();
+  return new Map(rows.map((row) => [row.objectId, row.object]));
+}
+
+async function applyObjectWrites(writes: PageObjectWrites): Promise<void> {
+  if (writes.deletes.length > 0) await database.pageObjects.bulkDelete(writes.deletes);
+  if (writes.puts.length > 0) await database.pageObjects.bulkPut(writes.puts);
+}
+
 export async function loadPages(): Promise<NotebookPage[]> {
-  const pages = await database.pages.orderBy("createdAt").toArray();
-  return pages.map(migratePersistedPage);
+  const [metadataRows, objectRows] = await Promise.all([
+    database.pages.orderBy("createdAt").toArray(),
+    database.pageObjects.toArray(),
+  ]);
+  const rowsByPage = new Map<string, PageObjectRecord[]>();
+  for (const row of objectRows) {
+    const rows = rowsByPage.get(row.pageId);
+    if (rows) rows.push(row);
+    else rowsByPage.set(row.pageId, [row]);
+  }
+
+  const pages = metadataRows.map((metadata) => (
+    migratePersistedPage(assemblePage(metadata, rowsByPage.get(metadata.id) ?? []))
+  ));
+  savedObjects.clear();
+  for (const page of pages) rememberSavedObjects(page);
+  return pages;
 }
 
 function enqueuePageWrite<T>(pageId: string, operation: () => Promise<T>): Promise<T> {
@@ -64,31 +153,58 @@ function enqueuePageWrite<T>(pageId: string, operation: () => Promise<T>): Promi
 }
 
 export function savePage(page: NotebookPage, expectedUpdatedAt?: number): Promise<{ hasRecovery: boolean }> {
-  const snapshot = structuredClone(page);
+  // The state to diff against is taken now, before the mirror moves on, so that
+  // a second save queued behind this one still compares against the right page.
+  const previous = savedObjects.get(page.id);
+  rememberSavedObjects(page);
+  const { metadata } = splitPage(page);
+
   return enqueuePageWrite(page.id, async () => {
-    let hasRecovery = false;
-    await database.transaction("rw", database.pages, database.recoverySnapshots, async () => {
-      const current = await database.pages.get(page.id);
-      assertExpectedPageVersion(current ? migratePersistedPage(current) : undefined, expectedUpdatedAt, page.id);
-      if (current) {
-        await database.recoverySnapshots.put(createRecoverySnapshot(migratePersistedPage(current)));
-        hasRecovery = true;
-      }
-      await database.pages.put(snapshot);
-    });
-    return { hasRecovery };
+    try {
+      let hasRecovery = false;
+      await database.transaction("rw", database.pages, database.pageObjects, database.recoverySnapshots, async () => {
+        const current = await database.pages.get(page.id);
+        assertExpectedPageVersion(current, expectedUpdatedAt, page.id);
+
+        const before = previous ?? (current ? await storedObjectMap(page.id) : new Map<string, NotebookObject>());
+        const writes = diffPageObjects(page.id, before, page.objects);
+        if (current) {
+          await database.recoverySnapshots.put(structuredClone(recoveryPatchFor(current, before, writes)));
+          hasRecovery = true;
+        }
+        await applyObjectWrites(structuredClone(writes));
+        await database.pages.put(structuredClone(metadata));
+      });
+      return { hasRecovery };
+    } catch (error) {
+      savedObjects.delete(page.id);
+      throw error;
+    }
   });
 }
 
 export function deletePage(pageId: string, expectedUpdatedAt: number, replacement?: NotebookPage): Promise<void> {
   return enqueuePageWrite(pageId, async () => {
-    await database.transaction("rw", database.pages, database.recoverySnapshots, async () => {
-      const current = await database.pages.get(pageId);
-      assertExpectedPageVersion(current ? migratePersistedPage(current) : undefined, expectedUpdatedAt, pageId);
-      await database.pages.delete(pageId);
-      await database.recoverySnapshots.delete(pageId);
-      if (replacement) await database.pages.add(structuredClone(replacement));
-    });
+    try {
+      await database.transaction("rw", database.pages, database.pageObjects, database.recoverySnapshots, async () => {
+        const current = await database.pages.get(pageId);
+        assertExpectedPageVersion(current, expectedUpdatedAt, pageId);
+        await database.pages.delete(pageId);
+        await database.pageObjects.where("pageId").equals(pageId).delete();
+        await database.recoverySnapshots.delete(pageId);
+        if (replacement) {
+          const split = splitPage(replacement);
+          await database.pageObjects.bulkAdd(structuredClone(split.objects));
+          await database.pages.add(structuredClone(split.metadata));
+        }
+      });
+      savedObjects.delete(pageId);
+      if (replacement) rememberSavedObjects(replacement);
+    } catch (error) {
+      savedObjects.delete(pageId);
+      if (replacement) savedObjects.delete(replacement.id);
+      throw error;
+    }
   });
 }
 
@@ -97,27 +213,45 @@ export async function hasRecoverySnapshot(pageId: string): Promise<boolean> {
 }
 
 export function restorePreviousPage(pageId: string, expectedUpdatedAt: number): Promise<NotebookPage | undefined> {
-  return enqueuePageWrite(pageId, async () => database.transaction(
-    "rw",
-    database.pages,
-    database.recoverySnapshots,
-    async () => {
-      const [currentRecord, recovery] = await Promise.all([
-        database.pages.get(pageId),
-        database.recoverySnapshots.get(pageId),
-      ]);
-      assertExpectedPageVersion(currentRecord ? migratePersistedPage(currentRecord) : undefined, expectedUpdatedAt, pageId);
-      if (!currentRecord || !recovery) return undefined;
+  return enqueuePageWrite(pageId, async () => {
+    try {
+      const restored = await database.transaction(
+        "rw",
+        database.pages,
+        database.pageObjects,
+        database.recoverySnapshots,
+        async () => {
+          const [current, patch] = await Promise.all([
+            database.pages.get(pageId),
+            database.recoverySnapshots.get(pageId),
+          ]);
+          assertExpectedPageVersion(current, expectedUpdatedAt, pageId);
+          if (!current || !patch) return undefined;
 
-      const swapped = swapPageWithRecovery(
-        migratePersistedPage(currentRecord),
-        { ...recovery, page: migratePersistedPage(recovery.page) },
+          // Only the objects the patch names can differ, so only those are read.
+          const patchedIds = Object.keys(patch.objects);
+          const rows = await database.pageObjects.bulkGet(patchedIds.map((objectId) => [pageId, objectId]));
+          const currentObjects = new Map<string, NotebookObject>();
+          for (const row of rows) {
+            if (row) currentObjects.set(row.objectId, row.object);
+          }
+
+          const swap = applyRecoveryPatch(current, currentObjects, patch);
+          await applyObjectWrites(structuredClone(swap.writes));
+          await database.pages.put(structuredClone(swap.metadata));
+          await database.recoverySnapshots.put(structuredClone(swap.recovery));
+          return assemblePage(swap.metadata, await database.pageObjects.where("pageId").equals(pageId).toArray());
+        },
       );
-      await database.pages.put(swapped.restored);
-      await database.recoverySnapshots.put(swapped.recovery);
-      return swapped.restored;
-    },
-  ));
+      if (!restored) return undefined;
+      const page = migratePersistedPage(restored);
+      rememberSavedObjects(page);
+      return page;
+    } catch (error) {
+      savedObjects.delete(pageId);
+      throw error;
+    }
+  });
 }
 
 export async function saveAsset(blob: Blob): Promise<AssetRecord> {
@@ -141,22 +275,28 @@ export async function loadAssets(hashes: Iterable<string>): Promise<AssetRecord[
 }
 
 export async function storeImportedNotebook(pages: NotebookPage[], assets: AssetRecord[]): Promise<void> {
-  await database.transaction("rw", database.pages, database.assets, async () => {
+  const split = pages.map(splitPage);
+  await database.transaction("rw", database.pages, database.pageObjects, database.assets, async () => {
     await database.assets.bulkPut(assets);
-    await database.pages.bulkAdd(pages);
+    await database.pageObjects.bulkAdd(split.flatMap((page) => page.objects));
+    await database.pages.bulkAdd(split.map((page) => page.metadata));
   });
+  for (const page of pages) rememberSavedObjects(page);
 }
 
 export async function cleanupOrphanAssets(): Promise<{ removedCount: number; removedBytes: number }> {
-  return database.transaction("rw", database.pages, database.recoverySnapshots, database.assets, async () => {
-    const [pageRecords, recoveryRecords, assetRecords] = await Promise.all([
-      database.pages.toArray(),
+  return database.transaction("rw", database.pageObjects, database.recoverySnapshots, database.assets, async () => {
+    // Only image objects can hold an asset and they are indexed by kind, so
+    // this does not read the notebook's ink.
+    const [imageRows, recoveryRecords, assetRecords] = await Promise.all([
+      database.pageObjects.where("kind").equals("image").toArray(),
       database.recoverySnapshots.toArray(),
       database.assets.toArray(),
     ]);
-    const pages = pageRecords.map(migratePersistedPage);
-    const recoveries = recoveryRecords.map((recovery) => ({ ...recovery, page: migratePersistedPage(recovery.page) }));
-    const orphanHashes = orphanAssetHashes(pages, recoveries, assetRecords.map((asset) => asset.hash));
+    const orphanHashes = orphanAssetHashes(
+      [imageRows.map((row) => row.object), ...recoveryRecords.map(recoveredObjects)],
+      assetRecords.map((asset) => asset.hash),
+    );
     if (orphanHashes.length === 0) return { removedCount: 0, removedBytes: 0 };
 
     const orphanSet = new Set(orphanHashes);

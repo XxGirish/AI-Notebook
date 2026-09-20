@@ -28,53 +28,73 @@ function strokePath2D(stroke: StrokeObject): Path2D {
   return path;
 }
 
-// One shared scene function: the path travels as a node attribute, so props
-// stay equal between renders and react-konva has nothing to update.
-function drawInk(context: Context, shape: KonvaShape) {
-  const path = shape.getAttr("inkPath") as Path2D | undefined;
-  if (!path) return;
+// Highlighters draw first so pen ink stays crisp on top of them.
+const PASSES = ["highlighter", "pen"] as const;
+
+/**
+ * Every committed stroke is drawn by this one scene function, from the arrays
+ * handed over as node attributes. The page used to be a Konva node per stroke,
+ * which meant React reconciled and Konva diffed a thousand nodes to add one:
+ * that cost 52.6 ms at the 95th percentile per commit on a 1,180-stroke page,
+ * against 18.4 ms at 140 strokes (docs/decisions/0010-single-ink-node.md).
+ * Filling the cached Path2Ds is the only work left that follows page size.
+ */
+export function drawInk(context: Context, shape: KonvaShape) {
+  const strokes = shape.getAttr("strokes") as StrokeObject[] | undefined;
+  if (!strokes || strokes.length === 0) return;
+  const selectedIds = shape.getAttr("selectedIds") as Set<string>;
+  const transientPositions = shape.getAttr("transientPositions") as Record<string, Position>;
+  const outlineWidth = 2 / (shape.getAttr("cameraScale") as number);
   const native = context._context;
-  native.fillStyle = shape.fill() as string;
-  native.fill(path);
-  const outline = shape.strokeWidth();
-  if (outline > 0) {
-    native.lineWidth = outline;
-    native.strokeStyle = shape.stroke() as string;
-    native.stroke(path);
+
+  for (const pass of PASSES) {
+    let passStarted = false;
+    for (const stroke of strokes) {
+      if (stroke.tool !== pass) continue;
+      if (pass === "highlighter" && !passStarted) {
+        native.save();
+        native.globalAlpha = 0.3;
+        native.globalCompositeOperation = "multiply";
+        passStarted = true;
+      }
+
+      // A stroke being dragged is offset here rather than committed, so the
+      // document is not rewritten on every pointer move.
+      const position = transientPositions[stroke.id];
+      if (position) {
+        native.save();
+        native.translate(position.x - stroke.x, position.y - stroke.y);
+      }
+
+      const path = strokePath2D(stroke);
+      native.fillStyle = stroke.color;
+      native.fill(path);
+      if (selectedIds.has(stroke.id)) {
+        native.lineWidth = outlineWidth;
+        native.strokeStyle = "#ef8c45";
+        native.stroke(path);
+      }
+
+      if (position) native.restore();
+    }
+    if (passStarted) native.restore();
   }
 }
 
 /**
  * Committed ink. Memoized so that canvas state unrelated to strokes (lasso
- * preview, palm contacts, notices) does not reconcile every stroke on the page.
- * Highlighters draw first so pen ink stays crisp on top of them.
+ * preview, palm contacts, notices) does not redraw the page.
  */
 export const InkStrokes = memo(function InkStrokes({ strokes, selectedIds, transientPositions, cameraScale }: Props) {
-  const render = (stroke: StrokeObject) => {
-    const selected = selectedIds.has(stroke.id);
-    const position = transientPositions[stroke.id];
-    const highlighter = stroke.tool === "highlighter";
-    return (
-      <Shape
-        key={stroke.id}
-        sceneFunc={drawInk}
-        inkPath={strokePath2D(stroke)}
-        fill={stroke.color}
-        opacity={highlighter ? 0.3 : 1}
-        globalCompositeOperation={highlighter ? "multiply" : "source-over"}
-        stroke={selected ? "#ef8c45" : undefined}
-        strokeWidth={selected ? 2 / cameraScale : 0}
-        x={position ? position.x - stroke.x : 0}
-        y={position ? position.y - stroke.y : 0}
-        listening={false}
-        perfectDrawEnabled={false}
-      />
-    );
-  };
   return (
-    <>
-      {strokes.filter((stroke) => stroke.tool === "highlighter").map(render)}
-      {strokes.filter((stroke) => stroke.tool === "pen").map(render)}
-    </>
+    <Shape
+      sceneFunc={drawInk}
+      strokes={strokes}
+      selectedIds={selectedIds}
+      transientPositions={transientPositions}
+      cameraScale={cameraScale}
+      listening={false}
+      perfectDrawEnabled={false}
+    />
   );
 });

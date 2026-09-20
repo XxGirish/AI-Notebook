@@ -8,12 +8,6 @@ export const CURRENT_PAGE_SCHEMA_VERSION = 4;
 // Schema 3 added converted handwriting; schema 4 added typed canvas text.
 const OBJECT_KIND_INTRODUCED_IN: Record<string, number> = { "ink-text": 3, text: 4 };
 
-export type PageRecoverySnapshot = {
-  pageId: string;
-  capturedAt: number;
-  page: NotebookPage;
-};
-
 export class PageWriteConflictError extends Error {
   constructor(pageId: string) {
     super(`Page ${pageId} changed in another tab`);
@@ -21,7 +15,7 @@ export class PageWriteConflictError extends Error {
   }
 }
 
-export function assertExpectedPageVersion(current: NotebookPage | undefined, expectedUpdatedAt: number | undefined, pageId: string): void {
+export function assertExpectedPageVersion(current: { updatedAt: number } | undefined, expectedUpdatedAt: number | undefined, pageId: string): void {
   if (expectedUpdatedAt === undefined) {
     if (current) throw new PageWriteConflictError(pageId);
     return;
@@ -85,6 +79,15 @@ export function migratePersistedPage(value: unknown): NotebookPage {
     throw new Error(`Stored page ${value.id} contains objects its schema does not support`);
   }
 
+  // Objects are stored one row per id, so two objects sharing an id would lose
+  // one of them silently. Refusing the record keeps the loss visible instead.
+  const seenObjectIds = new Set<string>();
+  for (const object of value.objects) {
+    if (!isRecord(object) || typeof object.id !== "string") continue;
+    if (seenObjectIds.has(object.id)) throw new Error(`Stored page ${value.id} repeats object id ${object.id}`);
+    seenObjectIds.add(object.id);
+  }
+
   const createdAt = finiteNumber(value.createdAt, Date.now());
   const aiTransactions = schemaVersion >= 2
     ? (Array.isArray(value.aiTransactions) ? value.aiTransactions.map(migrateAiTransaction) : (() => { throw new Error(`Stored page ${value.id} has no AI transaction list`); })())
@@ -99,24 +102,5 @@ export function migratePersistedPage(value: unknown): NotebookPage {
     aiTransactions,
     createdAt,
     updatedAt: finiteNumber(value.updatedAt, createdAt),
-  };
-}
-
-export function createRecoverySnapshot(page: NotebookPage, capturedAt = Date.now()): PageRecoverySnapshot {
-  return { pageId: page.id, capturedAt, page: structuredClone(page) };
-}
-
-export function swapPageWithRecovery(
-  current: NotebookPage,
-  recovery: PageRecoverySnapshot,
-  now = Date.now(),
-): { restored: NotebookPage; recovery: PageRecoverySnapshot } {
-  if (current.id !== recovery.pageId || recovery.page.id !== current.id) {
-    throw new Error("Recovery snapshot belongs to another page");
-  }
-
-  return {
-    restored: { ...structuredClone(recovery.page), updatedAt: Math.max(now, current.updatedAt + 1, recovery.page.updatedAt + 1) },
-    recovery: createRecoverySnapshot(current, now),
   };
 }
