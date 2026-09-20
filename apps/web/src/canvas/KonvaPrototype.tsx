@@ -20,7 +20,9 @@ import type {
   TextObject,
 } from "../domain/notebook";
 import { applyCanvasBatch, prepareCanvasBatch, transactionRecordFromBatch, type PreparedCanvasBatch } from "../ai/proposalCompiler";
-import { mockLessonProposal, validateCanvasProposal, type SemanticOperationType } from "@ai-notebook/ai-contract";
+import { mockLessonProposal, validateCanvasProposal, type AiIntent, type SemanticOperationType } from "@ai-notebook/ai-contract";
+import { requestAiDraft, type AiDraftPhase } from "../ai/aiSession";
+import { AI_CANVAS_ACTIONS, AI_REQUEST_PLANS } from "../ai/requestContext";
 import { LearningCard } from "../components/LearningCard";
 import { DiagramLabelEditor } from "../components/DiagramLabelEditor";
 import { InkTextEditor } from "../components/InkTextEditor";
@@ -111,6 +113,19 @@ const TOOL_LABELS: Record<Tool, string> = {
 };
 // Pen Pro neatens once the writer pauses: long enough to finish a word, short enough to feel automatic.
 const HANDWRITING_PAUSE_MS = 1_200;
+/**
+ * Optional shared token for a personal deployment, built into the bundle and so
+ * readable by anyone who can open the app. It keeps strangers on the same
+ * network off the gateway; the DeepSeek key stays in the gateway process.
+ */
+const GATEWAY_ACCESS_TOKEN = import.meta.env.VITE_GATEWAY_ACCESS_TOKEN as string | undefined;
+const AI_PHASE_LABELS: Record<AiDraftPhase, string> = {
+  sending: "Sending the selection",
+  generating: "Writing",
+  validating: "Checking the answer",
+  repairing: "Asking for a correction",
+  preparing: "Laying it out",
+};
 const PEN_COLOR = "#183153";
 const HIGHLIGHTER_COLOR = "#f5c842";
 // Predicted samples may extend the drawn tip by at most this many screen
@@ -170,6 +185,10 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
   const [imageNotice, setImageNotice] = useState<string>();
   const [aiDraft, setAiDraft] = useState<PreparedCanvasBatch>();
   const [aiDraftError, setAiDraftError] = useState<string>();
+  const [aiRun, setAiRun] = useState<{ intent: AiIntent; phase: AiDraftPhase }>();
+  /** Set only when the failure is worth trying again, so Retry is never offered on a refusal. */
+  const [aiRetryIntent, setAiRetryIntent] = useState<AiIntent>();
+  const aiAbortRef = useRef<AbortController>();
   const [editingDiagramObjectId, setEditingDiagramObjectId] = useState<string>();
   const [erasingIds, setErasingIds] = useState<Set<string>>(() => new Set());
   const [editingInkTextId, setEditingInkTextId] = useState<string>();
@@ -258,8 +277,13 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
     if (readOnly) {
       if (tool !== "select" && tool !== "pan") setTool("select");
       setAiDraft(undefined);
+      aiAbortRef.current?.abort();
     }
   }, [readOnly, tool]);
+
+  // Leaving the page, or closing the tab, must not leave the gateway generating
+  // against a page that is no longer open.
+  useEffect(() => () => aiAbortRef.current?.abort(), []);
 
   useEffect(() => {
     const viewport = rootRef.current;
@@ -560,9 +584,66 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
     && !(selectedGroupIds.size === 1 && selectedObjects.every((object) => object.groupId && selectedGroupIds.has(object.groupId)));
   const canUngroup = selectedGroupIds.size > 0;
 
-  const prepareMockLesson = () => {
-    if (readOnly || aiDraft) return;
+  const selectionBounds = (() => {
+    const visualSelection = selectedObjects.filter((object) => object.kind !== "connector");
+    if (visualSelection.length === 0) return undefined;
+    const left = Math.min(...visualSelection.map((object) => object.x));
+    const top = Math.min(...visualSelection.map((object) => object.y));
+    return {
+      x: left,
+      y: top,
+      width: Math.max(...visualSelection.map((object) => object.x + object.width)) - left,
+      height: Math.max(...visualSelection.map((object) => object.y + object.height)) - top,
+    };
+  })();
+
+  const viewportCenter = {
+    x: (size.width / 2 - camera.x) / camera.scale,
+    y: (size.height / 2 - camera.y) / camera.scale,
+  };
+
+  /**
+   * Sends one AI action to the same-origin gateway. The returned draft is not
+   * on the page: it is laid out locally and waits for the writer to accept it.
+   */
+  const runAiAction = async (intent: AiIntent) => {
+    if (readOnly || aiDraft || aiRun) return;
     setAiDraftError(undefined);
+    setAiRetryIntent(undefined);
+    const controller = new AbortController();
+    aiAbortRef.current = controller;
+    setAiRun({ intent, phase: "sending" });
+    const outcome = await requestAiDraft({
+      pageId: fixture.id,
+      intent,
+      objects,
+      selectedIds,
+      selectionBounds,
+      viewportCenter,
+      signal: controller.signal,
+      accessToken: GATEWAY_ACCESS_TOKEN,
+      onPhase: (phase) => setAiRun((current) => (current ? { ...current, phase } : current)),
+    });
+    aiAbortRef.current = undefined;
+    setAiRun(undefined);
+    if (outcome.status === "draft") {
+      setAiDraft(outcome.batch);
+      return;
+    }
+    if (outcome.status === "cancelled") return;
+    setAiDraftError(outcome.message);
+    if (outcome.retryable) setAiRetryIntent(intent);
+  };
+
+  const cancelAiAction = () => {
+    aiAbortRef.current?.abort();
+    aiAbortRef.current = undefined;
+  };
+
+  const prepareMockLesson = () => {
+    if (readOnly || aiDraft || aiRun) return;
+    setAiDraftError(undefined);
+    setAiRetryIntent(undefined);
     try {
       const operationType: SemanticOperationType = "insert_lesson_section";
       const requestId = `request-${crypto.randomUUID()}`;
@@ -573,15 +654,6 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
         targetObjects: new Map(),
         maxOperations: 1,
       });
-      const visualSelection = selectedObjects.filter((object) => object.kind !== "connector");
-      const left = visualSelection.length > 0 ? Math.min(...visualSelection.map((object) => object.x)) : 0;
-      const top = visualSelection.length > 0 ? Math.min(...visualSelection.map((object) => object.y)) : 0;
-      const selectionBounds = visualSelection.length === 0 ? undefined : {
-        x: left,
-        y: top,
-        width: Math.max(...visualSelection.map((object) => object.x + object.width)) - left,
-        height: Math.max(...visualSelection.map((object) => object.y + object.height)) - top,
-      };
       setAiDraft(prepareCanvasBatch({
         transactionId: `transaction-${crypto.randomUUID()}`,
         pageId: fixture.id,
@@ -597,10 +669,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
           sources: selectedObjects.map((object) => ({ id: object.id, revision: object.revision })),
         },
         selectionBounds,
-        viewportCenter: {
-          x: (size.width / 2 - camera.x) / camera.scale,
-          y: (size.height / 2 - camera.y) / camera.scale,
-        },
+        viewportCenter,
       }));
     } catch (error) {
       setAiDraftError(error instanceof Error ? error.message : "The mock proposal could not be prepared.");
@@ -1325,7 +1394,18 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
         </div>
 
         <div className="tool-group" role="group" aria-label="Learning tools">
-          <button type="button" onClick={prepareMockLesson} disabled={readOnly || Boolean(aiDraft)}>Mock lesson</button>
+          {AI_CANVAS_ACTIONS.map((intent) => (
+            <button
+              key={intent}
+              type="button"
+              onClick={() => void runAiAction(intent)}
+              disabled={readOnly || Boolean(aiDraft) || Boolean(aiRun)}
+              title={AI_REQUEST_PLANS[intent].requiresContext ? "Select a note, card or diagram first" : undefined}
+            >
+              {AI_REQUEST_PLANS[intent].label}
+            </button>
+          ))}
+          <button type="button" onClick={prepareMockLesson} disabled={readOnly || Boolean(aiDraft) || Boolean(aiRun)} title="Build a fixture lesson on this device, with no network request">Mock lesson</button>
         </div>
 
         <div className="tool-group" role="group" aria-label="Selection actions">
@@ -1363,18 +1443,39 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
           onCancel={() => setConfirmingClear(false)}
         />
 
-        {(aiDraft || aiDraftError) && (
-          <aside className="ai-draft" aria-label="AI draft preview">
+        {(aiDraft || aiDraftError || aiRun) && (
+          <aside className="ai-draft" aria-label="AI draft preview" aria-busy={Boolean(aiRun)}>
             <div>
-              <strong>{aiDraft ? "Mock lesson draft" : "Draft unavailable"}</strong>
-              <span>{aiDraft ? `${aiDraft.inserts.length} editable objects prepared locally. No network request was made.` : aiDraftError}</span>
+              <strong>
+                {aiRun
+                  ? AI_REQUEST_PLANS[aiRun.intent].label
+                  : aiDraft
+                    ? `${AI_REQUEST_PLANS[aiDraft.provenance.intent].label} draft`
+                    : "Nothing was added"}
+              </strong>
+              <span role={aiRun ? "status" : undefined}>
+                {aiRun
+                  ? `${AI_PHASE_LABELS[aiRun.phase]}…`
+                  : aiDraft
+                    ? `${aiDraft.inserts.length} editable ${aiDraft.inserts.length === 1 ? "object" : "objects"} from ${aiDraft.provenance.provider}/${aiDraft.provenance.model}, waiting on the page.`
+                    : aiDraftError}
+              </span>
             </div>
-            {aiDraft && (
-              <div className="ai-draft__actions">
-                <button type="button" onClick={() => { setAiDraft(undefined); setAiDraftError(undefined); }}>Discard</button>
-                <button type="button" onClick={acceptAiDraft}>Add to page</button>
-              </div>
-            )}
+            <div className="ai-draft__actions">
+              {aiRun && <button type="button" onClick={cancelAiAction}>Cancel</button>}
+              {!aiRun && aiDraftError && aiRetryIntent && (
+                <button type="button" onClick={() => void runAiAction(aiRetryIntent)}>Try again</button>
+              )}
+              {!aiRun && aiDraftError && (
+                <button type="button" onClick={() => { setAiDraftError(undefined); setAiRetryIntent(undefined); }}>Dismiss</button>
+              )}
+              {aiDraft && (
+                <>
+                  <button type="button" onClick={() => { setAiDraft(undefined); setAiDraftError(undefined); }}>Discard</button>
+                  <button type="button" onClick={acceptAiDraft}>Add to page</button>
+                </>
+              )}
+            </div>
           </aside>
         )}
 

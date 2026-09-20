@@ -8,6 +8,12 @@
       "port": 5173
     },
     {
+      "name": "gateway",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--workspace", "@ai-notebook/gateway"],
+      "port": 8787
+    },
+    {
       "name": "web-5174",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--workspace", "@ai-notebook/web", "--", "--port", "5174", "--strictPort"],
