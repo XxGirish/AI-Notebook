@@ -253,6 +253,9 @@ button { font: inherit; }
 .canvas-viewport[data-tool="pan"]:active { cursor: grabbing; }
 .konva-stage { position: absolute !important; inset: 0; }
 .ink-stage { position: absolute !important; inset: 0; z-index: 3; }
+/* Live ink under the pen. Same level as the ink stage but later in the DOM, so
+   it draws over committed ink; everything interactive stays above it. */
+.wet-ink-layer { position: absolute; inset: 0; z-index: 3; width: 100%; height: 100%; pointer-events: none; }
 .card-layer { position: absolute; inset: 0; z-index: 2; pointer-events: none; transform-origin: 0 0; }
 .card-layer[aria-hidden="true"] { pointer-events: none; }
 .canvas-viewport[data-tool="text"] { cursor: text; }
