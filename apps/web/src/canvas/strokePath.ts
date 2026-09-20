@@ -11,8 +11,10 @@ type InkPoint = Pick<PointSample, "x" | "y" | "pressure">;
  * rendered tip trail the pen and cuts the corners of every loop, and it drops
  * the first `size` units of each stroke to hide noise. On small cursive those
  * three effects removed about a quarter of the ink (measured against the true
- * path; see docs/decisions/0007-ink-latency-fidelity-and-neatening.md). The only
- * processing left here is interpolation between samples, which restores the curvature
+ * path; see docs/decisions/0007-ink-latency-fidelity-and-neatening.md). The one
+ * systematic digitizer error, the diagonal wobble of capacitive pens, is taken
+ * out when the stroke is captured (digitizerWobble.ts), so the only processing
+ * left here is interpolation between samples, which restores the curvature
  * that straight chords lose when samples are sparse (60 Hz touch, fast writing).
  */
 const OUTLINE_OPTIONS = {

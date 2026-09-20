@@ -38,6 +38,7 @@ import { boundsFromPoints, sizeFromBottomRightHandle, type CanvasBounds } from "
 import { gestureKindFor, isInkTool, pointerSamples, type TouchMode, type Tool } from "./pointerRouting";
 import { contactSize, inkingContactId, reportsContactGeometry, type Contact } from "./palmRejection";
 import { appendDistinctPoints, strokeIntersectsPoint } from "./strokeMath";
+import { removeDigitizerWobble } from "./digitizerWobble";
 import { useElementSize } from "./useElementSize";
 import {
   editInkText,
@@ -833,11 +834,12 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
 
   // Draws the stroke under the pen straight away, outside React (see wetInk.ts).
   // Where the OS can draw the delegated ink trail it covers the gap to the pen
-  // exactly; otherwise the browser's predicted samples stand in for it.
+  // exactly; otherwise the browser's predicted samples stand in for it. The
+  // wobble filter leaves the newest sample in place, so both join the tip.
   const drawWetStroke = (gesture: Gesture, nativeEvent?: PointerEvent) => {
     const layer = wetInkRef.current;
     const style = gesture.strokeStyle;
-    const points = liveStrokeRef.current;
+    const points = removeDigitizerWobble(liveStrokeRef.current, camera.scale);
     const tip = points.at(-1);
     if (!layer || !style || !tip) return;
 
@@ -1072,7 +1074,8 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
 
     // A single sample is a tap: the dot of an i or j, a full stop. It is ink too.
     if (!cancelled && gesture.kind === "stroke" && gesture.strokeStyle && liveStrokeRef.current.length > 0 && !readOnly) {
-      const points = liveStrokeRef.current;
+      // The same filter the wet stroke was drawn with, so the ink does not shift at pen-up.
+      const points = removeDigitizerWobble(liveStrokeRef.current, camera.scale);
       const style = gesture.strokeStyle;
       const strokeTool = style.tool;
       const strokeSize = style.size;
