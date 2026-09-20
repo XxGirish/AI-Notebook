@@ -1,7 +1,7 @@
 # 0011 — Canvas AI actions run over the gateway
 
 Date: 2026-09-20
-Status: accepted, mock-verified. No live DeepSeek request has been made.
+Status: accepted. Mock-verified, then confirmed against the live DeepSeek API on 2026-09-20.
 Builds on: 0003 (the gateway and provider contract)
 
 ## What was missing
@@ -102,12 +102,46 @@ Against a real gateway on the mock provider, in the browser:
 - The gateway logged redacted metadata only — request id, intent, provider,
   model, outcome, latency, token counts. No context, no prompt, no output.
 
+## The live probe
+
+Four real requests through `deepseek-flash`, strict tool mode, thinking
+disabled, one per canvas action, against the Newton's-second-law page:
+
+| Action | Latency | Prompt / completion tokens | Cached prompt | Calls | Result |
+|---|---:|---:|---:|---:|---|
+| Teach a section | 3.8 s | 2,415 / 714 | 0 | 1 | 15 objects |
+| Explain selection | 2.7 s | 2,877 / 397 | 256 | 1 | 2 objects |
+| Create diagram | 3.3 s | 7,215 / 657 | 3,584 | **2** | 9 objects |
+| Create quiz | 2.2 s | 3,799 / 363 | 256 | 1 | 1 object |
+
+All four produced valid proposals that committed, persisted and survived a
+reload, with provenance recording `provider: "deepseek"` and the sources sent.
+
+Three things this settles:
+
+- **The generated strict schema is accepted.** The account works, the beta
+  strict function endpoint takes the per-request reduced schema, and streamed
+  tool arguments reassemble into a proposal the application validator accepts.
+- **The single repair attempt earns its place.** Create diagram failed
+  validation on the model's first answer and passed on the repair — two calls,
+  one committed result, and the writer saw only a slightly slower draft. Without
+  the repair that action would simply have failed.
+- **Prompt caching engages** once the page context repeats: 3,584 of 7,215
+  prompt tokens were cached on the third request.
+
+Quality, on this one page: the explanations and the quiz were good — the
+generated quiz was a misconception question about a braking car with a correct
+answer key and correct vector reasoning, better than the page's own fixture
+quiz. The weak result was **Teach a section**, which paraphrased the existing
+quiz back twice: given a page that already contains a question, it repeated it
+rather than extending the material. That is a prompt problem, not a wiring
+problem, and it is the first thing to tune.
+
 ## Not verified
 
-- **Any live DeepSeek request.** Account access, whether the real model's output
-  passes `validateCanvasProposal` often enough to be usable, latency, cost and
-  quality are all still unknown. The mock provider proves the wiring, not the
-  model.
+- Anything beyond one page and one subject. Four requests is a smoke test, not
+  an evaluation: no claim is made here about quality across topics, about how
+  often the repair is needed, or about cost at everyday use.
 - Cancelling a generation in the browser: the mock answers in ~34 ms, so there
   is nothing to cancel by hand. The cancel path — abort the stream, then ask the
   gateway to stop the provider call so it stops spending tokens — is covered by
