@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent } from "react";
 import { citedPassageIds } from "@ai-notebook/ai-contract";
 import type { NotebookPage } from "../../domain/pages";
-import { answerForCanvas, buildChatRequest } from "../../ai/chatRequest";
+import { answerForCanvas, buildChatRequest, citedPageSources } from "../../ai/chatRequest";
+import { withContentHashes } from "../../domain/staleness";
 import { cancelGeneration, GatewayError, streamChat } from "../../ai/gatewayClient";
 import {
   clearChatMessages,
@@ -29,7 +30,7 @@ type Props = {
   activePageId: string;
   isOnline: boolean;
   readOnly: boolean;
-  onAddToPage: (answer: { title: string; body: string; provider: string; model: string }) => Promise<ChatInsertOutcome>;
+  onAddToPage: (answer: { title: string; body: string; provider: string; model: string; sources?: Array<{ id: string; revision: number; contentHash?: string }> }) => Promise<ChatInsertOutcome>;
   onOpenPage: (pageId: string) => void;
   /** Changes when sources or chat were written outside the panel, such as by an import. */
   libraryGeneration: number;
@@ -288,11 +289,15 @@ export function ChatDock({ pages, activePageId, isOnline, readOnly, onAddToPage,
   const addToPage = async (message: ChatMessageRecord, index: number) => {
     const question = [...messages.slice(0, index)].reverse().find((item) => item.role === "user")?.content ?? "Study assistant";
     setAddStatus((current) => ({ ...current, [message.id]: "Adding…" }));
+    // Notes on the receiving page that the answer cited become its recorded sources.
+    const page = pagesRef.current.find((candidate) => candidate.id === activePageId);
+    const sources = page ? await withContentHashes(citedPageSources(message.citations ?? [], page), page.objects) : [];
     const outcome = await onAddToPage({
       title: question.replace(/\s+/g, " ").trim(),
       body: answerForCanvas(message.content, message.citations ?? []),
       provider: message.provider ?? "unknown",
       model: message.model ?? "unknown",
+      sources,
     });
     setAddStatus((current) => ({ ...current, [message.id]: outcome.ok ? "Added to the page" : outcome.message }));
   };

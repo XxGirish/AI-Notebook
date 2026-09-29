@@ -6,7 +6,9 @@ import {
   type ChatPassage,
   type ChatRequest,
 } from "@ai-notebook/ai-contract";
-import type { ChatMessageRecord } from "../persistence/notebookDatabase";
+import type { NotebookPage } from "../domain/pages";
+import type { ChatCitation, ChatMessageRecord } from "../persistence/notebookDatabase";
+import { buildContextCandidates } from "./requestContext";
 
 /** Leaves room below the gateway's limit for JSON escaping of unusual characters. */
 const REQUEST_BYTE_BUDGET = MAX_CHAT_REQUEST_BYTES - 8 * 1024;
@@ -71,4 +73,26 @@ export function answerForCanvas(answer: string, citations: ReadonlyArray<{ id: s
     return `[${index + 1}] ${citation.origin}${citation.locator ? `, ${citation.locator}` : ""}`;
   });
   return `${body}\n\nSources:\n${references.join("\n")}`;
+}
+
+/**
+ * The objects on one page that an answer cited, as provenance sources. A
+ * derived diagram citation stands for all of its nodes. Citations of uploaded
+ * files or other pages are left out: they are not objects on this page, and
+ * the answer's text already names them.
+ */
+export function citedPageSources(citations: readonly ChatCitation[], page: Pick<NotebookPage, "id" | "objects">): Array<{ id: string; revision: number }> {
+  const byId = new Map(page.objects.map((object) => [object.id, object]));
+  const diagrams = new Map<string, Array<{ id: string; revision: number }>>();
+  for (const candidate of buildContextCandidates(page.objects, new Set(), { x: 0, y: 0 })) {
+    if (candidate.item.kind === "diagram") diagrams.set(candidate.item.id, candidate.item.nodes.map(({ id, revision }) => ({ id, revision })));
+  }
+  const sources = new Map<string, { id: string; revision: number }>();
+  for (const citation of citations) {
+    if (citation.pageId !== page.id || !citation.objectId) continue;
+    const object = byId.get(citation.objectId);
+    const cited = object ? [{ id: object.id, revision: object.revision }] : diagrams.get(citation.objectId) ?? [];
+    for (const source of cited) sources.set(source.id, source);
+  }
+  return [...sources.values()];
 }

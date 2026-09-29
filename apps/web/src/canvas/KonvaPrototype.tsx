@@ -78,7 +78,15 @@ import {
 import { cameraCentredOn, wheelDeltaInPixels, wheelZoomScale, zoomCameraAt, type Camera } from "./cameraMath";
 
 /** Text the chat panel asked to place on this page, as one editable card. */
-export type CanvasInsertRequest = { id: string; title: string; body: string; provider: string; model: string };
+export type CanvasInsertRequest = {
+  id: string;
+  title: string;
+  body: string;
+  provider: string;
+  model: string;
+  /** Notes on this page the answer cited, fingerprinted when it was added. */
+  sources?: Array<{ id: string; revision: number; contentHash?: string }>;
+};
 export type CanvasInsertOutcome = { ok: true } | { ok: false; message: string };
 
 type Props = {
@@ -780,7 +788,11 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
           model: insertRequest.model,
           configurationId: "chat",
           proposalSchemaVersion: proposal.schemaVersion,
-          sources: [],
+          // A cited note edited since it was fingerprinted is left out rather than
+          // failing the insert or recording a hash that no longer matches it.
+          sources: (insertRequest.sources ?? [])
+            .filter((source) => objects.some((object) => object.id === source.id && object.revision === source.revision))
+            .map((source) => ({ ...source, selected: true })),
         },
         selectionBounds,
         viewportCenter,
