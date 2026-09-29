@@ -11,7 +11,13 @@ const envSchema = z.object({
   DEEPSEEK_MODEL: z.string().trim().min(1).max(100).default("deepseek-flash"),
   DEEPSEEK_BASE_URL: z.url({ protocol: /^https$/ }).default("https://api.deepseek.com"),
   DEEPSEEK_BETA_BASE_URL: z.url({ protocol: /^https$/ }).default("https://api.deepseek.com/beta"),
-  DEEPSEEK_OUTPUT_MODE: z.enum(["strict_tool", "json_object"]).default("strict_tool"),
+  // JSON Output is the default on measured evidence, not preference: on the
+  // 57-case prompt set, strict function mode returned structurally malformed
+  // JSON (mismatched brackets) on 7 cases that JSON Output answered correctly,
+  // and cost more tokens and latency for the same work. See
+  // docs/decisions/0012-json-output-and-prompt-v2.md. Strict mode stays
+  // configurable so the comparison can be run again on a newer model.
+  DEEPSEEK_OUTPUT_MODE: z.enum(["strict_tool", "json_object"]).default("json_object"),
   DEEPSEEK_MAX_OUTPUT_TOKENS: integer(6_000, 256, 32_000),
   GATEWAY_ACCESS_TOKEN: z.string().min(32, "GATEWAY_ACCESS_TOKEN must be at least 32 characters").optional(),
   GATEWAY_HOST: z.string().trim().min(1).default("127.0.0.1"),
