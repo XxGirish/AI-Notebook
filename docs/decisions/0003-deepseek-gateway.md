@@ -16,7 +16,7 @@ The DeepSeek provider defaults to `deepseek-flash`, disables thinking, and force
 ## Protections
 
 - `DEEPSEEK_API_KEY` and `GATEWAY_ACCESS_TOKEN` are read only from the server environment (`apps/gateway/.env`, ignored). Startup requires both for the live provider, and requires the access token for any non-loopback host. AI routes compare a bearer token using fixed-length digests.
-- One in-flight generation per gateway process, a per-minute window, daily request/token budgets, a server timeout, and rejection of reused request IDs. These counters are in memory and reset on restart.
+- One in-flight generation per gateway process, a per-minute window, daily request/token budgets, a server timeout, and rejection of reused request IDs. These counters are in memory and reset on restart. (2026-09-29: failed calls are charged too — reported usage when DeepSeek sent it, otherwise a high estimate when the request reached DeepSeek; see 0013.)
 - Streamed tool arguments and content are reassembled before parsing; reasoning content is ignored. Finish reasons, keep-alives, malformed events, missing completion, HTTP 401/402/422/429/5xx, cancellation, and timeout map to distinct error codes.
 - Notebook context is framed as untrusted material, and `<` is escaped so notebook text cannot close its context block. Model output is only ever parsed as proposal JSON.
 - Logs contain request ID, intent, provider/model/configuration, outcome, error code, call and repair counts, latency, and token usage — never context, prompts, outputs, or keys. The service worker no longer intercepts `/api` routes.

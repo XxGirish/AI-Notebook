@@ -40,6 +40,15 @@ export interface AiProvider {
 }
 
 export class ProviderError extends Error {
+  /** Usage the provider reported before the call failed, such as for an answer cut off at the token limit. */
+  usage?: UsageReport;
+  /**
+   * Tokens the call may have been billed for when it reached the provider but
+   * failed before usage was reported (a cancel, timeout or broken stream).
+   * DeepSeek reports usage only in the final stream chunk.
+   */
+  estimatedTokens = 0;
+
   constructor(
     readonly code: GatewayErrorCode,
     message: string,
@@ -48,6 +57,32 @@ export class ProviderError extends Error {
     super(message);
     this.name = "ProviderError";
   }
+}
+
+export function reportedTokens(usage: UsageReport | undefined): number {
+  return (usage?.promptTokens ?? 0) + (usage?.completionTokens ?? 0);
+}
+
+/**
+ * A deliberately high token estimate for text whose usage was never reported.
+ * About three characters per token overcounts English prose and JSON, which is
+ * the safe direction for a spend limit.
+ */
+export function estimateTokens(characters: number): number {
+  return Math.ceil(Math.max(0, characters) / 3);
+}
+
+/**
+ * Attaches what a failed call cost, or may have cost, to its error so the
+ * gateway can charge it against the daily budget. Reported usage wins; an
+ * estimate is used only when the request reached the provider and nothing was
+ * reported. Anything that is not a ProviderError passes through unchanged.
+ */
+export function chargeFailedCall(error: unknown, cost: { usage?: UsageReport; reached: boolean; sentCharacters: number; outputCharacters: number }): unknown {
+  if (!(error instanceof ProviderError)) return error;
+  if (cost.usage) error.usage = cost.usage;
+  else if (cost.reached) error.estimatedTokens = estimateTokens(cost.sentCharacters) + estimateTokens(cost.outputCharacters);
+  return error;
 }
 
 export function addUsage(total: UsageReport, next: UsageReport | undefined): UsageReport {

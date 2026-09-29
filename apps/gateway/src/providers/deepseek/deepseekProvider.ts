@@ -1,11 +1,14 @@
 import type { UsageReport } from "@ai-notebook/ai-contract";
-import { ProviderError, type AiProvider, type ChatCall, type ChatResult, type ProviderCall, type ProviderResult } from "../types";
+import { chargeFailedCall, ProviderError, type AiProvider, type ChatCall, type ChatResult, type ProviderCall, type ProviderResult } from "../types";
 import { buildChatMessages, CHAT_PROMPT_VERSION } from "./chatPrompt";
 import { buildSystemPrompt, buildUserPrompt, PROMPT_VERSION, PROPOSAL_TOOL_NAME } from "./prompt";
 import { buildStrictProposalSchema } from "./providerSchema";
 import { readSseData } from "./sse";
 
 export type DeepSeekOutputMode = "strict_tool" | "json_object";
+
+/** What one call has cost so far, kept up to date so a failure can still be charged. */
+type CallMeter = { reached: boolean; sentCharacters: number; outputCharacters: number; usage?: UsageReport };
 
 export type DeepSeekProviderOptions = {
   apiKey: string;
@@ -97,8 +100,19 @@ export class DeepSeekProvider implements AiProvider {
   }
 
   async generate(call: ProviderCall): Promise<ProviderResult> {
+    const meter: CallMeter = { reached: false, sentCharacters: 0, outputCharacters: 0 };
+    try {
+      return await this.streamProposal(call, meter);
+    } catch (error) {
+      throw chargeFailedCall(error, meter);
+    }
+  }
+
+  private async streamProposal(call: ProviderCall, meter: CallMeter): Promise<ProviderResult> {
     const { signal } = call;
     const baseUrl = this.options.outputMode === "strict_tool" ? this.options.betaBaseUrl : this.options.baseUrl;
+    const body = JSON.stringify(this.buildRequestBody(call));
+    meter.sentCharacters = body.length;
     let response: Response;
     try {
       response = await this.fetchImpl(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
@@ -108,15 +122,19 @@ export class DeepSeekProvider implements AiProvider {
           "Content-Type": "application/json",
           Accept: "text/event-stream",
         },
-        body: JSON.stringify(this.buildRequestBody(call)),
+        body,
         signal,
       });
     } catch (error) {
+      // A cancel while waiting for headers may still have started a billed
+      // generation; a connection that never opened cannot have.
+      meter.reached = signal.aborted;
       if (signal.aborted) throw new ProviderError("cancelled", "Generation was cancelled", false);
       throw new ProviderError("provider_unavailable", `DeepSeek could not be reached: ${errorName(error)}`, true);
     }
 
     if (!response.ok) throw await httpError(response);
+    meter.reached = true;
     if (!response.body) throw new ProviderError("provider_unavailable", "DeepSeek returned no response stream", true);
 
     let content = "";
@@ -134,7 +152,7 @@ export class DeepSeekProvider implements AiProvider {
         } catch {
           throw new ProviderError("provider_unavailable", "DeepSeek sent a malformed stream event", true);
         }
-        if (chunk.usage) usage = usageFrom(chunk.usage);
+        if (chunk.usage) meter.usage = usage = usageFrom(chunk.usage);
         const choice = chunk.choices?.[0];
         if (!choice) continue;
         const delta = choice.delta ?? {};
@@ -152,6 +170,7 @@ export class DeepSeekProvider implements AiProvider {
           }
           toolCalls.set(index, current);
         }
+        meter.outputCharacters = outputCharacters;
         if (outputCharacters > MAX_OUTPUT_CHARACTERS) {
           throw new ProviderError("truncated", "The proposal exceeded the gateway's output size limit", false);
         }
@@ -199,7 +218,18 @@ export class DeepSeekProvider implements AiProvider {
    * an error the panel can show rather than passing for a whole one.
    */
   async chat(call: ChatCall): Promise<ChatResult> {
+    const meter: CallMeter = { reached: false, sentCharacters: 0, outputCharacters: 0 };
+    try {
+      return await this.streamChat(call, meter);
+    } catch (error) {
+      throw chargeFailedCall(error, meter);
+    }
+  }
+
+  private async streamChat(call: ChatCall, meter: CallMeter): Promise<ChatResult> {
     const { signal } = call;
+    const body = JSON.stringify(buildChatRequestBody(this.options.model, this.options.maxOutputTokens, call));
+    meter.sentCharacters = body.length;
     let response: Response;
     try {
       response = await this.fetchImpl(`${this.options.baseUrl.replace(/\/+$/, "")}/chat/completions`, {
@@ -209,14 +239,16 @@ export class DeepSeekProvider implements AiProvider {
           "Content-Type": "application/json",
           Accept: "text/event-stream",
         },
-        body: JSON.stringify(buildChatRequestBody(this.options.model, this.options.maxOutputTokens, call)),
+        body,
         signal,
       });
     } catch (error) {
+      meter.reached = signal.aborted;
       if (signal.aborted) throw new ProviderError("cancelled", "The answer was cancelled", false);
       throw new ProviderError("provider_unavailable", `DeepSeek could not be reached: ${errorName(error)}`, true);
     }
     if (!response.ok) throw await httpError(response);
+    meter.reached = true;
     if (!response.body) throw new ProviderError("provider_unavailable", "DeepSeek returned no response stream", true);
 
     let finishReason: string | undefined;
@@ -231,12 +263,13 @@ export class DeepSeekProvider implements AiProvider {
         } catch {
           throw new ProviderError("provider_unavailable", "DeepSeek sent a malformed stream event", true);
         }
-        if (chunk.usage) usage = usageFrom(chunk.usage);
+        if (chunk.usage) meter.usage = usage = usageFrom(chunk.usage);
         const choice = chunk.choices?.[0];
         if (!choice) continue;
         const text = choice.delta?.content;
         if (typeof text === "string" && text.length > 0) {
           outputCharacters += text.length;
+          meter.outputCharacters = outputCharacters;
           if (outputCharacters > MAX_CHAT_OUTPUT_CHARACTERS) {
             throw new ProviderError("truncated", "The answer exceeded the gateway's output size limit", false);
           }

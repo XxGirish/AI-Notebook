@@ -16,7 +16,7 @@ import {
 } from "@ai-notebook/ai-contract";
 import { runGeneration } from "./generation";
 import type { GenerationLimiter } from "./limits";
-import { ProviderError, type AiProvider } from "./providers/types";
+import { ProviderError, reportedTokens, type AiProvider } from "./providers/types";
 
 export type GenerationLogRecord = {
   event: "generation";
@@ -34,6 +34,8 @@ export type GenerationLogRecord = {
   completionTokens?: number;
   cachedPromptTokens?: number;
   reasoningTokens?: number;
+  /** Charged to the daily budget for failed calls that never reported usage. */
+  estimatedTokens?: number;
 };
 
 export type GatewayAppOptions = {
@@ -138,6 +140,7 @@ export function createGatewayApp(options: GatewayAppOptions) {
             timedOut: () => timedOut,
             emit,
           });
+          billedTokens = reportedTokens(outcome.usage) + outcome.estimatedTokens;
           options.log?.({
             event: "generation",
             requestId: request.requestId,
@@ -151,6 +154,7 @@ export function createGatewayApp(options: GatewayAppOptions) {
             repairAttempts: outcome.repairAttempts,
             latencyMs: now() - startedAt,
             ...outcome.usage,
+            ...(outcome.estimatedTokens > 0 ? { estimatedTokens: outcome.estimatedTokens } : {}),
           });
         } finally {
           clearInterval(keepAlive);
@@ -209,6 +213,7 @@ export function createGatewayApp(options: GatewayAppOptions) {
         let outcome: GenerationLogRecord["outcome"] = "answer";
         let errorCode: GatewayErrorCode | undefined;
         let usage: UsageReport = {};
+        let estimatedTokens = 0;
         try {
           await emit({ type: "started", requestId: request.requestId, provider: options.provider.id, model: options.provider.model });
           const result = await options.provider.chat({
@@ -217,11 +222,16 @@ export function createGatewayApp(options: GatewayAppOptions) {
             onDelta: (text) => emit({ type: "delta", text }),
           });
           usage = result.usage ?? {};
-          billedTokens = (result.usage?.promptTokens ?? 0) + (result.usage?.completionTokens ?? 0);
+          billedTokens = reportedTokens(result.usage);
           if (result.usage) await emit({ type: "usage", usage: result.usage });
           await emit({ type: "complete" });
         } catch (error) {
           outcome = "error";
+          if (error instanceof ProviderError) {
+            usage = error.usage ?? {};
+            estimatedTokens = error.estimatedTokens;
+            billedTokens = reportedTokens(error.usage) + estimatedTokens;
+          }
           let code: GatewayErrorCode = "provider_unavailable";
           let message = "The AI provider failed unexpectedly";
           let retryable = true;
@@ -252,6 +262,7 @@ export function createGatewayApp(options: GatewayAppOptions) {
             repairAttempts: 0,
             latencyMs: now() - startedAt,
             ...usage,
+            ...(estimatedTokens > 0 ? { estimatedTokens } : {}),
           });
         }
       });

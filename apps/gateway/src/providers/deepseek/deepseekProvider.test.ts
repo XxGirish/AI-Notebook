@@ -141,3 +141,77 @@ describe("DeepSeek provider", () => {
     await expectProviderError(provider.generate({ request: sampleRequest(), signal: controller.signal }), "cancelled");
   });
 });
+
+/** A response stream that delivers some events, then fails the way an aborted fetch body does. */
+function streamThenAbort(chunks: string[], controller: AbortController): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  let index = 0;
+  return new ReadableStream<Uint8Array>({
+    pull(stream) {
+      if (index < chunks.length) {
+        stream.enqueue(encoder.encode(chunks[index++]));
+        return;
+      }
+      controller.abort();
+      stream.error(new DOMException("aborted", "AbortError"));
+    },
+  });
+}
+
+describe("charging failed DeepSeek calls", () => {
+  const partialArguments = '{"operations":[{"type":"insert_text_block","text":"partial';
+
+  it("estimates a call cancelled mid-stream from what was sent and received, because usage arrives only at the end", async () => {
+    const controller = new AbortController();
+    const { provider, captured } = providerWith(() => new Response(streamThenAbort(
+      sseChunks([{ choices: [{ delta: { tool_calls: [{ index: 0, function: { name: "propose_canvas_patch", arguments: partialArguments } }] } }] }], { done: false }),
+      controller,
+    )));
+    const error = await expectProviderError(provider.generate({ request: sampleRequest(), signal: controller.signal }), "cancelled");
+    const sentCharacters = String(captured[0].init.body).length;
+    expect(error.usage).toBeUndefined();
+    expect(error.estimatedTokens).toBe(Math.ceil(sentCharacters / 3) + Math.ceil(partialArguments.length / 3));
+  });
+
+  it("charges a cancel while waiting for headers for the prompt, since generation may have started", async () => {
+    const controller = new AbortController();
+    const { provider, captured } = providerWith(() => {
+      controller.abort();
+      throw new DOMException("aborted", "AbortError");
+    });
+    const error = await expectProviderError(provider.generate({ request: sampleRequest(), signal: controller.signal }), "cancelled");
+    expect(error.estimatedTokens).toBe(Math.ceil(String(captured[0].init.body).length / 3));
+  });
+
+  it("keeps the reported usage of a call that failed after finishing, such as one cut off at the token limit", async () => {
+    const { provider } = providerWith(() => sse(toolChunks(validExplanation, "length")));
+    const error = await expectProviderError(provider.generate({ request: sampleRequest(), signal: new AbortController().signal }), "truncated");
+    expect(error.usage).toMatchObject({ promptTokens: 900, completionTokens: 120 });
+    expect(error.estimatedTokens).toBe(0);
+  });
+
+  it("charges nothing for calls DeepSeek refused or never received", async () => {
+    const limited = providerWith(() => new Response(JSON.stringify({ error: { message: "slow down" } }), { status: 429 }));
+    expect((await expectProviderError(limited.provider.generate({ request: sampleRequest(), signal: new AbortController().signal }), "provider_rate_limited")).estimatedTokens).toBe(0);
+    const unreachable = providerWith(() => {
+      throw new TypeError("fetch failed");
+    });
+    expect((await expectProviderError(unreachable.provider.chat({ request: { requestId: "chat-1", messages: [{ role: "user", content: "hi" }], passages: [] }, signal: new AbortController().signal, onDelta: () => undefined }), "provider_unavailable")).estimatedTokens).toBe(0);
+  });
+
+  it("estimates a chat answer stopped mid-stream including the text already streamed", async () => {
+    const controller = new AbortController();
+    const { provider, captured } = providerWith(() => new Response(streamThenAbort(
+      sseChunks([{ choices: [{ delta: { content: "Momentum is" } }] }, { choices: [{ delta: { content: " mass times velocity" } }] }], { done: false }),
+      controller,
+    )));
+    const received: string[] = [];
+    const error = await expectProviderError(provider.chat({
+      request: { requestId: "chat-2", messages: [{ role: "user", content: "What is momentum?" }], passages: [] },
+      signal: controller.signal,
+      onDelta: (text) => void received.push(text),
+    }), "cancelled");
+    expect(received.join("")).toBe("Momentum is mass times velocity");
+    expect(error.estimatedTokens).toBe(Math.ceil(String(captured[0].init.body).length / 3) + Math.ceil("Momentum is mass times velocity".length / 3));
+  });
+});

@@ -5,6 +5,7 @@ import { GenerationLimiter } from "./limits";
 import { buildChatRequestBody } from "./providers/deepseek/deepseekProvider";
 import { MockProvider } from "./providers/mockProvider";
 import { ProviderError } from "./providers/types";
+import { sampleRequest } from "./testSupport";
 
 const token = "access-token-".padEnd(40, "x");
 
@@ -100,5 +101,54 @@ describe("chat request body", () => {
 describe("citations", () => {
   it("keeps only labels that were sent, once each, in order of use", () => {
     expect(citedPassageIds("A [S2] and B [S1][S2] and C [S9]", ["S1", "S2"])).toEqual(["S2", "S1"]);
+  });
+});
+
+describe("daily budget for failed calls", () => {
+  /** A provider whose every call fails the way a cancelled DeepSeek stream does. */
+  const failingProvider = () => {
+    const provider = new MockProvider();
+    const fail = async () => {
+      const error = new ProviderError("provider_unavailable", "The DeepSeek stream ended before completion", true);
+      error.estimatedTokens = 500;
+      throw error;
+    };
+    provider.chat = fail;
+    provider.generate = fail;
+    return provider;
+  };
+
+  function appWithBudget(dailyTokens: number) {
+    const logs: GenerationLogRecord[] = [];
+    const app = createGatewayApp({
+      provider: failingProvider(),
+      limiter: new GenerationLimiter({ requestsPerMinute: 10, dailyRequests: 100, dailyTokens }),
+      accessToken: token,
+      generationTimeoutMs: 5_000,
+      log: (record) => logs.push(record),
+    });
+    const post = (path: string, body: unknown) => app.request(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    });
+    return { logs, post };
+  }
+
+  it("charges a failed chat's estimated tokens, so repeated cancels cannot spend past the budget", async () => {
+    const { logs, post } = appWithBudget(400);
+    await (await post("/api/ai/chat", chatRequest({ requestId: "chat-request-a" }))).text();
+    expect(logs[0]).toMatchObject({ outcome: "error", estimatedTokens: 500 });
+    const next = await post("/api/ai/chat", chatRequest({ requestId: "chat-request-b" }));
+    expect(next.status).toBe(429);
+    expect(await next.json()).toMatchObject({ code: "budget_exhausted" });
+  });
+
+  it("charges a failed canvas generation the same way", async () => {
+    const { logs, post } = appWithBudget(400);
+    await (await post("/api/ai/generate", sampleRequest({ requestId: "generate-request-a" }))).text();
+    expect(logs[0]).toMatchObject({ outcome: "error", estimatedTokens: 500 });
+    const next = await post("/api/ai/generate", sampleRequest({ requestId: "generate-request-b" }));
+    expect(await next.json()).toMatchObject({ code: "budget_exhausted" });
   });
 });

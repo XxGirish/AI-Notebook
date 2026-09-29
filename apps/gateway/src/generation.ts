@@ -17,6 +17,8 @@ export type GenerationOutcome = {
   calls: number;
   repairAttempts: number;
   usage: UsageReport;
+  /** Tokens charged for failed calls that reported no usage; see ProviderError.estimatedTokens. */
+  estimatedTokens: number;
 };
 
 type RunGenerationOptions = {
@@ -82,6 +84,7 @@ export function checkProposalText(text: string, protocolIssues: string[], reques
  */
 export async function runGeneration({ request, provider, signal, timedOut, emit, maxRepairAttempts = 1, onAttempt }: RunGenerationOptions): Promise<GenerationOutcome> {
   let usage: UsageReport = {};
+  let estimatedTokens = 0;
   let calls = 0;
   let repair: RepairContext | undefined;
   let lastWasEmpty = false;
@@ -91,7 +94,7 @@ export async function runGeneration({ request, provider, signal, timedOut, emit,
   const fail = async (code: GatewayErrorCode, message: string, retryable: boolean): Promise<GenerationOutcome> => {
     if (calls > 0) await emit({ type: "usage", usage, calls });
     await emit({ type: "error", code, message, retryable });
-    return { outcome: "error", errorCode: code, calls, repairAttempts: Math.max(0, calls - 1), usage };
+    return { outcome: "error", errorCode: code, calls, repairAttempts: Math.max(0, calls - 1), usage, estimatedTokens };
   };
 
   for (let attempt = 0; attempt <= maxRepairAttempts; attempt += 1) {
@@ -101,6 +104,10 @@ export async function runGeneration({ request, provider, signal, timedOut, emit,
       calls += 1;
       result = await provider.generate({ request, repair, signal });
     } catch (error) {
+      if (error instanceof ProviderError) {
+        usage = addUsage(usage, error.usage);
+        estimatedTokens += error.estimatedTokens;
+      }
       if (signal.aborted) {
         return timedOut()
           ? fail("timeout", "Generation took too long and was stopped", true)
@@ -124,7 +131,7 @@ export async function runGeneration({ request, provider, signal, timedOut, emit,
       await emit({ type: "usage", usage, calls });
       await emit({ type: "proposal", proposal: checked.proposal, repairAttempts: attempt });
       await emit({ type: "complete" });
-      return { outcome: "proposal", calls, repairAttempts: attempt, usage };
+      return { outcome: "proposal", calls, repairAttempts: attempt, usage, estimatedTokens };
     }
     lastWasEmpty = result.text === "" && result.protocolIssues.length === 0;
     repair = { previousOutput: result.text, errors: checked.errors };
