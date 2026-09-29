@@ -25,10 +25,8 @@
 @media (prefers-reduced-motion: reduce) {
   .chat-orb, .chat-orb[data-busy="true"], .chat-dock { transition: none; animation: none; }
 }
-/* Canvas full screen: the assistant is moved inside the full-screen element (or raised above the fixed
-   fallback) and the orb sits clear of the canvas status pill. */
+/* Canvas full screen: the assistant is moved inside the full-screen element, or raised above the fixed fallback. */
 body:has(.prototype[data-fullscreen-fallback="true"]) :is(.chat-orb, .chat-dock) { z-index: 1001; }
-:is(.prototype:fullscreen, body:has(.prototype[data-fullscreen-fallback="true"])) .chat-orb { bottom: 76px; }
 @media (max-width: 640px) {
   .chat-dock { top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; height: min(78vh, 640px); }
 }

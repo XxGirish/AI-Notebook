@@ -1,29 +1,21 @@
 import { useEffect, useRef, useState } from "react";
+import { PanelLeftClose, Plus } from "lucide-react";
 import { movePage, type NotebookPage } from "../domain/pages";
 import type { WriterLeaseStatus } from "../persistence/writerLease";
 
 type Props = {
   pages: NotebookPage[];
   activePageId: string;
-  saveStatus: "loading" | "saving" | "saved" | "error";
-  saveError?: string;
-  storageSummary?: string;
-  canRestore: boolean;
-  transferStatus?: string;
   writerStatus: WriterLeaseStatus;
   onCreate: () => void;
   onOpen: (pageId: string) => void;
   onRename: (pageId: string, title: string) => void;
   onReorder: (pageId: string, toIndex: number) => void;
   onDelete: (pageId: string) => void;
-  onRestore: () => void;
-  onExport: (scope: "page" | "all") => void;
-  onExportPage: (format: "svg" | "png" | "print") => void;
-  onImport: (file: File) => void;
-  onTakeOver: () => void;
+  onClose: () => void;
 };
 
-export function PageSidebar({ pages, activePageId, saveStatus, saveError, storageSummary, canRestore, transferStatus, writerStatus, onCreate, onOpen, onRename, onReorder, onDelete, onRestore, onExport, onExportPage, onImport, onTakeOver }: Props) {
+export function PageSidebar({ pages, activePageId, writerStatus, onCreate, onOpen, onRename, onReorder, onDelete, onClose }: Props) {
   const [renamingId, setRenamingId] = useState<string>();
   const [deletingId, setDeletingId] = useState<string>();
   const [draftTitle, setDraftTitle] = useState("");
@@ -53,7 +45,6 @@ export function PageSidebar({ pages, activePageId, saveStatus, saveError, storag
     onReorder(page.id, toIndex);
     setMoveAnnouncement(`${page.title} moved to position ${toIndex + 1} of ${pages.length}`);
   };
-  const archiveInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (renamingId) inputRef.current?.select();
@@ -79,13 +70,15 @@ export function PageSidebar({ pages, activePageId, saveStatus, saveError, storag
   };
 
   return (
-    <aside className="page-sidebar" aria-label="Notebook pages">
+    <aside className="page-sidebar" id="page-sidebar" aria-label="Notebook pages">
       <div className="page-sidebar__header">
-        <div>
-          <p className="page-sidebar__eyebrow">AI Notebook</p>
-          <h2>Pages</h2>
-        </div>
-        <button type="button" className="new-page-button" onClick={onCreate} aria-label="Create new page" disabled={writerStatus !== "writer"}>+</button>
+        <h2>Pages</h2>
+        <button type="button" className="new-page-button" onClick={onCreate} aria-label="Create new page" title="New page" disabled={writerStatus !== "writer"}>
+          <Plus size={20} strokeWidth={2} aria-hidden="true" />
+        </button>
+        <button type="button" className="icon-button" onClick={onClose} aria-label="Hide pages" title="Hide pages (Ctrl+\)">
+          <PanelLeftClose size={20} strokeWidth={1.75} aria-hidden="true" />
+        </button>
       </div>
 
       <nav className="page-list" aria-label="Page history" ref={listRef}>
@@ -174,51 +167,6 @@ export function PageSidebar({ pages, activePageId, saveStatus, saveError, storag
         ))}
       </nav>
       <p className="visually-hidden" role="status" aria-live="polite">{moveAnnouncement}</p>
-
-      <div className="writer-state" data-state={writerStatus} role="status">
-        <span>
-          {writerStatus === "writer"
-            ? "Editing in this tab"
-            : writerStatus === "reader"
-              ? "Read-only: another tab is editing"
-              : writerStatus === "unsupported"
-                ? "Read-only: tab locking unavailable"
-                : "Checking edit access…"}
-        </span>
-        {writerStatus === "reader" && <button type="button" onClick={onTakeOver}>Take over editing</button>}
-      </div>
-
-      <div className="notebook-transfer" aria-label="Notebook transfer">
-        <button type="button" onClick={() => onExport("page")} disabled={saveStatus !== "saved" || !activePageId} title="Download only this page, with its images and quiz answers, as an .ainotebook file">Archive page</button>
-        <button type="button" onClick={() => onExport("all")} disabled={saveStatus !== "saved"} title="Download every page plus uploaded sources and chat history, to back up or move the whole notebook">Back up all</button>
-        <button type="button" onClick={() => onExportPage("svg")} disabled={!activePageId} title="Download this page as a scalable SVG">Page SVG</button>
-        <button type="button" onClick={() => onExportPage("png")} disabled={!activePageId} title="Download this page as a PNG image">Page PNG</button>
-        <button type="button" onClick={() => onExportPage("print")} disabled={!activePageId} title="Print this page, or save it as PDF from the print dialog">Print</button>
-        <button type="button" onClick={() => archiveInputRef.current?.click()} disabled={saveStatus !== "saved" || writerStatus !== "writer"}>Import</button>
-        <input
-          ref={archiveInputRef}
-          className="visually-hidden"
-          type="file"
-          accept=".ainotebook,application/vnd.ai-notebook+zip,application/zip"
-          tabIndex={-1}
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            event.target.value = "";
-            if (file) onImport(file);
-          }}
-        />
-        {transferStatus && <span role="status">{transferStatus}</span>}
-      </div>
-
-      <div className="page-sidebar__footer" data-status={saveStatus}>
-        <div className="save-state">
-          <span className="save-dot" aria-hidden="true" />
-          <span>{saveStatus === "loading" ? "Opening notebook…" : saveStatus === "saving" ? "Saving…" : saveStatus === "error" ? "Save failed" : "Saved locally"}</span>
-        </div>
-        {saveError && <p className="save-error" role="alert">{saveError}</p>}
-        {storageSummary && <span className="storage-summary">{storageSummary}</span>}
-        {canRestore && <button type="button" className="restore-page-button" onClick={onRestore} disabled={writerStatus !== "writer"}>Restore previous</button>}
-      </div>
     </aside>
   );
 }

@@ -8,11 +8,11 @@ In the browser that opened the app, in IndexedDB, for that one site address. Tha
 - clearing site data, some private-browsing modes, and storage pressure on a full device can delete it;
 - there is no automatic sync between devices.
 
-The sidebar shows how much storage the notebook uses. If the browser refuses a write (for example because storage is full), the status says so and the change is **not** marked "Saved".
+The notebook menu (the **⋯** button beside the page title) shows how much storage the notebook uses. If the browser refuses a write (for example because storage is full), the status says so and the change is **not** marked "Saved".
 
 ## Archiving one page or backing up everything
 
-The sidebar has two buttons, both available once everything is saved:
+The notebook menu has two archive actions, both available once everything is saved:
 
 - **Archive page** downloads only the page you have open, named after it (for example `forces-and-motion.ainotebook`). It carries that page's objects, images, quiz answers, AI reports and AI provenance. It does **not** include uploaded sources or the chat history, which belong to the whole notebook.
 - **Back up all** downloads the whole notebook as `ai-notebook-<date>.ainotebook`. Use it for backups and for moving to another device.
@@ -33,7 +33,7 @@ Keep archives somewhere that is backed up, such as a cloud drive. An archive is 
 
 ## Restoring or moving to another device
 
-Open the app on the other device (over HTTPS for a tablet — see [self-hosting](self-hosting.md)), then Sidebar → **Import** and choose the archive.
+Open the app on the other device (over HTTPS for a tablet — see [self-hosting](self-hosting.md)), then open the notebook menu (**⋯**) → **Import archive…** and choose the archive.
 
 Import always adds an **independent copy**: pages get new identities and are added after the existing ones, so importing never overwrites anything. A source whose file is already on the device is not stored twice. Before anything is written, the whole archive is checked: its format version, every hash, sizes, unknown fields, references between objects, and missing or unexpected files. A damaged or tampered archive is refused with a reason and changes nothing.
 
@@ -42,7 +42,7 @@ Because imports are copies, editing the same notebook on two devices and importi
 ## Undoing a recent mistake
 
 - **Undo / Redo** (Ctrl+Z / Ctrl+Y) cover everything done on the page since it was opened, including AI insertions.
-- **Restore previous** in the sidebar swaps the page with its previous saved version. Pressing it again swaps back.
+- **Restore previous version** in the notebook menu swaps the page with its previous saved version. Pressing it again swaps back.
 - Deleting a page asks for confirmation and cannot be undone, except by importing an archive that contains it.
 
 ## Older archives

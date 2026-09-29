@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { CircleHelp, Eye, EyeOff, BookOpen, Maximize, Minimize, Minus, Plus, Redo2, SlidersHorizontal, Undo2 } from "lucide-react";
 import { Arrow, Circle, Ellipse, Group, Layer, Line, Rect, Stage, Text } from "react-konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import { commitHistory, createHistory, redoHistory, undoHistory } from "../domain/history";
@@ -36,7 +37,11 @@ import { AiProvenanceDialog } from "../components/AiProvenanceDialog";
 import { createAiFeedback, generatingTransactions } from "../domain/aiFeedback";
 import { learningObjectAdapter } from "../domain/learningObjectAdapters";
 import { describeQuizAttempts, summarizeQuizAttempts, type QuizAssistance } from "../domain/quizAttempts";
-import { describeRecency, QUIZ_REVIEW_LABELS, reviewQuizzes, summarizeReview } from "../domain/quizReview";
+import { reviewQuizzes } from "../domain/quizReview";
+import { MenuButton } from "../components/MenuButton";
+import { ToolDock } from "./ToolDock";
+import { SelectionToolbar } from "./SelectionToolbar";
+import { PageOutline } from "./PageOutline";
 import { DiagramLabelEditor } from "../components/DiagramLabelEditor";
 import { InkTextEditor } from "../components/InkTextEditor";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -100,6 +105,8 @@ type Props = {
   insertRequest?: CanvasInsertRequest;
   onInsertRequestHandled?: (id: string, outcome: CanvasInsertOutcome) => void;
   onPaperChange?: (paper: PaperStyle | undefined) => void;
+  /** The page's own controls (title, save state, notebook menu), shown in the canvas's top-left corner so they stay in full screen. */
+  leading?: ReactNode;
 };
 
 const draftLabel = (intent: AiTransactionRecord["intent"]) => (intent === "chat_answer" ? "Chat answer" : AI_REQUEST_PLANS[intent].label);
@@ -194,7 +201,7 @@ const readImageDimensions = (blob: Blob) => new Promise<Size>((resolve, reject) 
   image.src = url;
 });
 
-export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, insertRequest, onInsertRequestHandled, onPaperChange }: Props) {
+export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, insertRequest, onInsertRequestHandled, onPaperChange, leading }: Props) {
   const prototypeRef = useRef<HTMLElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -236,6 +243,9 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
   const [editingInkTextId, setEditingInkTextId] = useState<string>();
   const [handwritingNotice, setHandwritingNotice] = useState<string>();
   const [confirmingClear, setConfirmingClear] = useState(false);
+  const [outlineOpen, setOutlineOpen] = useState(false);
+  // Hides every control except the tool dock, for writing with nothing else on screen.
+  const [chromeHidden, setChromeHidden] = useState(false);
   const [newTextFontSize, setNewTextFontSize] = useState(DEFAULT_TEXT_FONT_SIZE);
   const [textEditing, setTextEditing] = useState<TextEditSession>();
   // Read by the window key handler, which is bound once and cannot see the current selection.
@@ -547,6 +557,9 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
         setHistory(redoHistory);
       } else if (!modifier && event.key === "Enter") {
         if (editSelectedTextRef.current()) event.preventDefault();
+      } else if (!modifier && event.key === ".") {
+        event.preventDefault();
+        setChromeHidden((hidden) => !hidden);
       } else if (!modifier) {
         const shortcut: Partial<Record<string, Tool>> = { v: "select", l: "lasso", p: "pen", w: "pen-pro", h: "highlighter", e: "eraser", r: "rectangle", o: "ellipse", a: "arrow", t: "text", " ": "pan" };
         const nextTool = shortcut[event.key.toLowerCase()];
@@ -1585,10 +1598,8 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
     () => objects.filter((object): object is StrokeObject => object.kind === "stroke" && !erasingIds.has(object.id)),
     [objects, erasingIds],
   );
-  const currentStrokeTool = tool === "highlighter" ? "highlighter" : "pen";
   const selectedInkText = selectedIds.size === 1 ? inkTexts.find((inkText) => selectedIds.has(inkText.id)) : undefined;
   const inkTextBeingEdited = inkTexts.find((inkText) => inkText.id === editingInkTextId && selectedIds.has(inkText.id));
-  const currentStrokeSize = currentStrokeTool === "highlighter" ? highlighterSize : penSize;
   const selectedText = selectedIds.size === 1 ? texts.find((text) => selectedIds.has(text.id)) : undefined;
   const textFontSizeValue = selectedText?.fontSize ?? newTextFontSize;
   editSelectedTextRef.current = () => {
@@ -1597,181 +1608,60 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
     return true;
   };
 
+  const hasSelection = selectedIds.size > 0;
+  const aiBusy = Boolean(aiDraft) || Boolean(aiRun);
+  const showSelectionToolbar = Boolean(selectionBounds) && !readOnly && !chromeHidden && !textEditing
+    && (tool === "select" || tool === "lasso")
+    && Object.keys(transientPositions).length === 0 && Object.keys(transientSizes).length === 0;
+  const zoomBy = (factor: number) => zoomAt(camera.scale * factor, { x: size.width / 2, y: size.height / 2 });
+  const chromeIcon = { size: 20, strokeWidth: 1.75, "aria-hidden": true } as const;
+
   return (
-    <section className="prototype" ref={prototypeRef} data-fullscreen-fallback={fullscreenFallback || undefined}>
-      <div className="prototype-controls">
-        <div className="prototype-toolbar" aria-label="Canvas tools">
-        <div className="tool-group" role="group" aria-label="Drawing tools">
-          {([
-            ["select", "Select", "V"],
-            ["lasso", "Lasso", "L"],
-            ["pen", "Pen", "P"],
-            ["pen-pro", "Pen Pro", "W"],
-            ["highlighter", "Highlight", "H"],
-            ["eraser", "Eraser", "E"],
-            ["rectangle", "Rectangle", "R"],
-            ["ellipse", "Ellipse", "O"],
-            ["arrow", "Arrow", "A"],
-            ["text", "Text", "T"],
-            ["pan", "Hand", "Space"],
-          ] as const).map(([value, label, shortcut]) => (
-            <button key={value} type="button" aria-pressed={tool === value} onClick={() => setTool(value)} title={`${label} (${shortcut})`} disabled={readOnly && value !== "select" && value !== "pan"}>
-              {label}
-            </button>
-          ))}
-        </div>
+    <section className="prototype" ref={prototypeRef} data-fullscreen-fallback={fullscreenFallback || undefined} data-chrome-hidden={chromeHidden || undefined}>
+      <button type="button" className="skip-link" onClick={() => setOutlineOpen(true)}>Open the page outline</button>
 
-        {isInkTool(tool) && (
-          <label className="size-control">
-            <span>Size</span>
-            <input
-              type="range"
-              min={tool === "highlighter" ? 10 : 1.5}
-              max={tool === "highlighter" ? 40 : 14}
-              step={0.5}
-              value={currentStrokeSize}
-              onChange={(event) => tool === "highlighter" ? setHighlighterSize(Number(event.target.value)) : setPenSize(Number(event.target.value))}
-            />
-            <output>{currentStrokeSize}px</output>
-          </label>
-        )}
+      {leading && !chromeHidden && <div className="canvas-corner canvas-corner--top-left">{leading}</div>}
 
-        {(tool === "text" || selectedText) && (
-          <label className="touch-mode">
-            <span>Text size</span>
-            <select
-              value={textFontSizeValue}
-              onChange={(event) => changeTextFontSize(Number(event.target.value))}
-              disabled={readOnly}
-              title={selectedText ? "Size of the selected text" : "Size for new text"}
-            >
-              {TEXT_FONT_SIZES.map(({ label, value }) => <option key={value} value={value}>{label}</option>)}
-              {!TEXT_FONT_SIZES.some(({ value }) => value === textFontSizeValue) && (
-                <option value={textFontSizeValue}>{textFontSizeValue}px</option>
-              )}
-            </select>
-          </label>
-        )}
-
-        <label className="touch-mode">
-          <span>Touch</span>
-          <select
-            value={touchMode}
-            onChange={(event) => {
-              touchModeChosenRef.current = true;
-              geometryWarnedRef.current = false;
-              setTouchMode(event.target.value as TouchMode);
-            }}
-            disabled={readOnly}
-            title="How bare touch contacts are treated while inking"
-          >
-            <option value="finger">Finger draws</option>
-            <option value="palm">Palm rejection</option>
-            <option value="stylus">Stylus only</option>
-          </select>
-        </label>
-
-        <label className="touch-mode">
-          <span>Canvas</span>
-          <select
-            value={canvasBackground}
-            onChange={(event) => {
-              const next = event.target.value as CanvasBackground;
-              setCanvasBackground(next);
-              writeCanvasBackground(next);
-            }}
-            title="The pattern behind every page on this device; it is not saved in the notebook or its exports"
-          >
-            {CANVAS_BACKGROUNDS.map((style) => <option key={style} value={style}>{CANVAS_BACKGROUND_LABELS[style]}</option>)}
-          </select>
-        </label>
-
-        <label className="touch-mode">
-          <span>Paper</span>
-          <select
-            value={fixture.paper ?? "none"}
-            onChange={(event) => onPaperChange?.(event.target.value === "none" ? undefined : event.target.value as PaperStyle)}
-            disabled={readOnly || !onPaperChange}
-            title="An optional sheet behind this page; writing past its edge is kept"
-          >
-            <option value="none">{PAPER_LABELS.none}</option>
-            {PAPER_STYLES.map((style) => <option key={style} value={style}>{PAPER_LABELS[style]}</option>)}
-          </select>
-        </label>
-
-        <div className="tool-group" role="group" aria-label="History">
-          <button type="button" disabled={readOnly || history.past.length === 0} onClick={() => setHistory(undoHistory)} title="Undo (Ctrl+Z)">Undo</button>
-          <button type="button" disabled={readOnly || history.future.length === 0} onClick={() => setHistory(redoHistory)} title="Redo (Ctrl+Y)">Redo</button>
-          <button type="button" disabled={readOnly || objects.length === 0} onClick={() => setConfirmingClear(true)} title="Remove everything on this page">Clear all</button>
-        </div>
-
-        <div className="tool-group" role="group" aria-label="Insert objects">
-          <button type="button" onClick={insertNote} disabled={readOnly}>Note</button>
-          <button type="button" onClick={() => imageInputRef.current?.click()} disabled={readOnly}>Image</button>
-          <input
-            ref={imageInputRef}
-            className="visually-hidden"
-            type="file"
-            accept="image/png,image/jpeg,image/webp,image/gif"
-            onChange={insertImage}
-            tabIndex={-1}
-            disabled={readOnly}
-          />
-          <button type="button" disabled={readOnly || selectedConnectables.length !== 2} onClick={connectSelection}>Connect</button>
-        </div>
-
-        <div className="tool-group" role="group" aria-label="Learning tools">
-          {AI_CANVAS_ACTIONS.map((intent) => (
-            <button
-              key={intent}
-              type="button"
-              onClick={() => void runAiAction(intent)}
-              disabled={readOnly || Boolean(aiDraft) || Boolean(aiRun)}
-              title={AI_REQUEST_PLANS[intent].requiresContext ? "Select a note, card or diagram first" : undefined}
-            >
-              {AI_REQUEST_PLANS[intent].label}
-            </button>
-          ))}
-          <button type="button" onClick={prepareMockLesson} disabled={readOnly || Boolean(aiDraft) || Boolean(aiRun)} title="Build a fixture lesson on this device, with no network request">Mock lesson</button>
-        </div>
-
-        <div className="tool-group" role="group" aria-label="Selection actions">
-          <span>{selectedIds.size} selected</span>
-          <button type="button" disabled={readOnly || selectedIds.size === 0} onClick={duplicateSelection}>Duplicate</button>
-          <button type="button" disabled={readOnly || selectedIds.size === 0} onClick={deleteSelection}>Delete</button>
-          <button type="button" disabled={readOnly || !canGroup} onClick={groupSelection}>Group</button>
-          <button type="button" disabled={readOnly || !canUngroup} onClick={ungroupSelection}>Ungroup</button>
-          <button type="button" disabled={readOnly || !selectedDiagramObject} onClick={() => setEditingDiagramObjectId(selectedDiagramObject?.id)}>Edit label</button>
-          {selectedInkText && (
-            <button type="button" disabled={readOnly} onClick={() => setEditingInkTextId(selectedInkText.id)}>Edit text</button>
-          )}
-          {selectedText && (
-            <button type="button" disabled={readOnly} onClick={() => startEditingText(selectedText)} title="Edit text (Enter or double-click)">Edit text</button>
-          )}
-        </div>
-
-        <div className="tool-group" role="group" aria-label="Zoom">
-          <button type="button" onClick={() => zoomAt(camera.scale / 1.2, { x: size.width / 2, y: size.height / 2 })} aria-label="Zoom out">−</button>
-          <button type="button" onClick={resetCamera} title="Reset camera">{Math.round(camera.scale * 100)}%</button>
-          <button type="button" onClick={() => zoomAt(camera.scale * 1.2, { x: size.width / 2, y: size.height / 2 })} aria-label="Zoom in">+</button>
-          <button type="button" onClick={() => void toggleFullscreen()} aria-pressed={isFullscreen} aria-label={isFullscreen ? "Exit canvas fullscreen" : "Enter canvas fullscreen"}>
-            {isFullscreen ? "Exit full screen" : "Full screen"}
-          </button>
-        </div>
-        </div>
-
-        <ConfirmDialog
-          open={confirmingClear}
-          tone="danger"
-          title="Clear this page?"
-          message={`This removes all ${objects.length} ${objects.length === 1 ? "item" : "items"} on the page. You can bring them back with Undo (Ctrl+Z).`}
-          confirmLabel="Clear page"
-          onConfirm={clearCanvas}
-          onCancel={() => setConfirmingClear(false)}
+      <div className="canvas-top-centre">
+        <ToolDock
+          tool={tool}
+          onToolChange={setTool}
+          readOnly={readOnly}
+          penSize={penSize}
+          highlighterSize={highlighterSize}
+          onStrokeSizeChange={(value) => tool === "highlighter" ? setHighlighterSize(value) : setPenSize(value)}
+          touchMode={touchMode}
+          onTouchModeChange={(mode) => {
+            touchModeChosenRef.current = true;
+            geometryWarnedRef.current = false;
+            setTouchMode(mode);
+          }}
+          textSize={tool === "text" || selectedText ? {
+            value: textFontSizeValue,
+            options: TEXT_FONT_SIZES,
+            editingSelection: Boolean(selectedText),
+            onChange: changeTextFontSize,
+          } : undefined}
+          onInsertNote={insertNote}
+          onInsertImage={() => imageInputRef.current?.click()}
+          aiActions={AI_CANVAS_ACTIONS.map((intent) => ({ intent, label: AI_REQUEST_PLANS[intent].label, requiresContext: AI_REQUEST_PLANS[intent].requiresContext }))}
+          aiBusy={aiBusy}
+          hasSelection={hasSelection}
+          onRunAi={(intent) => void runAiAction(intent)}
+          onMockLesson={import.meta.env.DEV ? prepareMockLesson : undefined}
+        />
+        <input
+          ref={imageInputRef}
+          className="visually-hidden"
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/gif"
+          onChange={insertImage}
+          tabIndex={-1}
+          disabled={readOnly}
         />
 
         {(aiDraft || aiDraftError || aiRun) && (
-          <aside className="ai-draft" aria-label="AI draft preview" aria-busy={Boolean(aiRun)}>
+          <aside className="ai-draft canvas-chrome" aria-label="AI draft preview" aria-busy={Boolean(aiRun)}>
             <div>
               <strong>
                 {aiRun
@@ -1824,68 +1714,175 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
             onRestoreInk={() => restoreInkText(inkTextBeingEdited.id)}
           />
         )}
-
-        {quizReview.length > 0 && (
-          <details className="linear-reading-view quiz-review">
-            <summary>Quiz review · {summarizeReview(quizReview)}</summary>
-            <ol>
-              {quizReview.map((item) => (
-                <li key={item.quizId} data-status={item.status}>
-                  <span className="quiz-review__status">{QUIZ_REVIEW_LABELS[item.status]}</span>
-                  <span className="quiz-review__prompt">{item.prompt}</span>
-                  <span className="quiz-review__meta">
-                    {item.lastAnsweredAt !== undefined
-                      ? `${item.attempts > 0 ? `${item.attempts} answer${item.attempts === 1 ? "" : "s"}, ` : ""}last ${describeRecency(item.lastAnsweredAt, Date.now())}`
-                      : ""}
-                  </span>
-                  <button type="button" onClick={() => goToObject(item.quizId)}>Go to</button>
-                </li>
-              ))}
-            </ol>
-          </details>
-        )}
-
-        {(() => {
-          const object = provenanceObjectId ? cards.find((card) => card.id === provenanceObjectId) : undefined;
-          const transaction = object ? generatedBy.get(object.id) : undefined;
-          if (!object || !transaction) return null;
-          const sourceIds = presentSelectedSources(transaction);
-          return (
-            <AiProvenanceDialog
-              key={object.id}
-              transaction={transaction}
-              actionLabel={draftLabel(transaction.intent)}
-              sourceCount={sourceIds.length}
-              reports={aiFeedback.reports.filter((report) => report.objectId === object.id)}
-              readOnly={readOnly}
-              onShowSources={() => {
-                setProvenanceObjectId(undefined);
-                selectSources(sourceIds);
-              }}
-              onReport={(reason, note) => aiFeedback.addReport(createAiFeedback({
-                id: `feedback-${crypto.randomUUID()}`,
-                pageId: fixture.id,
-                object,
-                transaction,
-                reason,
-                note,
-                contentSnapshot: learningObjectAdapter.toPlainText(object, { includeAnswer: true }),
-                createdAt: Date.now(),
-              }))}
-              onClose={() => setProvenanceObjectId(undefined)}
-            />
-          );
-        })()}
-
-        <details className="linear-reading-view">
-          <summary>Linear reading view</summary>
-          {linearReadingItems.length > 0 ? (
-            <ol>{linearReadingItems.map((item) => <li key={item.id}>{item.text}</li>)}</ol>
-          ) : (
-            <p>No readable learning objects on this page yet.</p>
-          )}
-        </details>
       </div>
+
+      {!chromeHidden && (
+        <div className="canvas-corner canvas-corner--top-right canvas-chrome" role="group" aria-label="Page actions">
+          <button type="button" className="icon-button" aria-label="Undo" title="Undo (Ctrl+Z)" aria-keyshortcuts="Control+Z" disabled={readOnly || history.past.length === 0} onClick={() => setHistory(undoHistory)}><Undo2 {...chromeIcon} /></button>
+          <button type="button" className="icon-button" aria-label="Redo" title="Redo (Ctrl+Y)" aria-keyshortcuts="Control+Y" disabled={readOnly || history.future.length === 0} onClick={() => setHistory(redoHistory)}><Redo2 {...chromeIcon} /></button>
+          <span className="tool-dock__divider" aria-hidden="true" />
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Page outline"
+            title={quizReview.length > 0 ? `Page outline and quiz review · ${quizReview.length} ${quizReview.length === 1 ? "quiz" : "quizzes"}` : "Page outline"}
+            aria-expanded={outlineOpen}
+            onClick={() => setOutlineOpen((open) => !open)}
+          >
+            <BookOpen {...chromeIcon} />
+            {quizReview.length > 0 && <span className="icon-button__badge" aria-hidden="true">{quizReview.length}</span>}
+          </button>
+          <MenuButton label="Page settings" icon={<SlidersHorizontal {...chromeIcon} />} align="end">
+            {(close) => (
+              <>
+                <label className="menu-field">
+                  <span>Background</span>
+                  <select
+                    value={canvasBackground}
+                    onChange={(event) => {
+                      const next = event.target.value as CanvasBackground;
+                      setCanvasBackground(next);
+                      writeCanvasBackground(next);
+                    }}
+                    title="The pattern behind every page on this device; it is not saved in the notebook or its exports"
+                  >
+                    {CANVAS_BACKGROUNDS.map((style) => <option key={style} value={style}>{CANVAS_BACKGROUND_LABELS[style]}</option>)}
+                  </select>
+                </label>
+                <label className="menu-field">
+                  <span>Paper</span>
+                  <select
+                    value={fixture.paper ?? "none"}
+                    onChange={(event) => onPaperChange?.(event.target.value === "none" ? undefined : event.target.value as PaperStyle)}
+                    disabled={readOnly || !onPaperChange}
+                    title="An optional sheet behind this page; writing past its edge is kept"
+                  >
+                    <option value="none">{PAPER_LABELS.none}</option>
+                    {PAPER_STYLES.map((style) => <option key={style} value={style}>{PAPER_LABELS[style]}</option>)}
+                  </select>
+                </label>
+                <hr />
+                <button type="button" className="menu-item menu-item--danger" disabled={readOnly || objects.length === 0} onClick={() => { close(); setConfirmingClear(true); }}>
+                  Clear page…
+                </button>
+              </>
+            )}
+          </MenuButton>
+        </div>
+      )}
+
+      <div className="canvas-corner canvas-corner--bottom-left canvas-chrome" role="group" aria-label="View">
+        {!chromeHidden && (
+          <>
+            <button type="button" className="icon-button" onClick={() => zoomBy(1 / 1.2)} aria-label="Zoom out" title="Zoom out"><Minus {...chromeIcon} /></button>
+            <button type="button" className="zoom-readout" onClick={resetCamera} title="Reset zoom and position">{Math.round(camera.scale * 100)}%</button>
+            <button type="button" className="icon-button" onClick={() => zoomBy(1.2)} aria-label="Zoom in" title="Zoom in"><Plus {...chromeIcon} /></button>
+            <span className="tool-dock__divider" aria-hidden="true" />
+            <button type="button" className="icon-button" onClick={() => void toggleFullscreen()} aria-pressed={isFullscreen} aria-label={isFullscreen ? "Exit full screen" : "Full screen"} title={isFullscreen ? "Exit full screen" : "Full screen"}>
+              {isFullscreen ? <Minimize {...chromeIcon} /> : <Maximize {...chromeIcon} />}
+            </button>
+            <MenuButton label="Help and shortcuts" icon={<CircleHelp {...chromeIcon} />} side="above">
+              {() => (
+                <div className="shortcut-help">
+                  <dl>
+                    <dt>V · L · P · W · H · E</dt><dd>Select, lasso, pen, neatening pen, highlighter, eraser</dd>
+                    <dt>R · O · A · T</dt><dd>Rectangle, ellipse, arrow, text</dd>
+                    <dt>Space</dt><dd>Hand (pan)</dd>
+                    <dt>Ctrl+Z · Ctrl+Y</dt><dd>Undo, redo</dd>
+                    <dt>Enter</dt><dd>Edit the selected text</dd>
+                    <dt>.</dt><dd>Hide or show the controls</dd>
+                    <dt>Wheel</dt><dd>Pan; Ctrl/⌘+wheel zooms</dd>
+                  </dl>
+                  <p>{strokes.length} strokes · {objects.length} objects on this page</p>
+                </div>
+              )}
+            </MenuButton>
+          </>
+        )}
+        <button
+          type="button"
+          className="icon-button"
+          onClick={() => setChromeHidden((hidden) => !hidden)}
+          aria-pressed={chromeHidden}
+          aria-label={chromeHidden ? "Show controls" : "Hide controls"}
+          title={chromeHidden ? "Show controls (.)" : "Hide controls (.)"}
+          aria-keyshortcuts="."
+        >
+          {chromeHidden ? <Eye {...chromeIcon} /> : <EyeOff {...chromeIcon} />}
+        </button>
+      </div>
+
+      {showSelectionToolbar && selectionBounds && (
+        <SelectionToolbar
+          box={{
+            left: camera.x + selectionBounds.x * camera.scale,
+            top: camera.y + selectionBounds.y * camera.scale,
+            width: selectionBounds.width * camera.scale,
+            height: selectionBounds.height * camera.scale,
+          }}
+          viewport={size}
+          count={selectedIds.size}
+          onDuplicate={duplicateSelection}
+          onDelete={deleteSelection}
+          onGroup={canGroup ? groupSelection : undefined}
+          onUngroup={canUngroup ? ungroupSelection : undefined}
+          onConnect={selectedConnectables.length === 2 ? connectSelection : undefined}
+          onEditLabel={selectedDiagramObject ? () => setEditingDiagramObjectId(selectedDiagramObject.id) : undefined}
+          onEditText={selectedInkText ? () => setEditingInkTextId(selectedInkText.id) : selectedText ? () => startEditingText(selectedText) : undefined}
+          onExplain={aiBusy ? undefined : () => void runAiAction("explain_selection")}
+        />
+      )}
+
+      {outlineOpen && (
+        <PageOutline
+          readingItems={linearReadingItems}
+          quizReview={quizReview}
+          onGoTo={goToObject}
+          onClose={() => setOutlineOpen(false)}
+        />
+      )}
+
+      <ConfirmDialog
+        open={confirmingClear}
+        tone="danger"
+        title="Clear this page?"
+        message={`This removes all ${objects.length} ${objects.length === 1 ? "item" : "items"} on the page. You can bring them back with Undo (Ctrl+Z).`}
+        confirmLabel="Clear page"
+        onConfirm={clearCanvas}
+        onCancel={() => setConfirmingClear(false)}
+      />
+
+      {(() => {
+        const object = provenanceObjectId ? cards.find((card) => card.id === provenanceObjectId) : undefined;
+        const transaction = object ? generatedBy.get(object.id) : undefined;
+        if (!object || !transaction) return null;
+        const sourceIds = presentSelectedSources(transaction);
+        return (
+          <AiProvenanceDialog
+            key={object.id}
+            transaction={transaction}
+            actionLabel={draftLabel(transaction.intent)}
+            sourceCount={sourceIds.length}
+            reports={aiFeedback.reports.filter((report) => report.objectId === object.id)}
+            readOnly={readOnly}
+            onShowSources={() => {
+              setProvenanceObjectId(undefined);
+              selectSources(sourceIds);
+            }}
+            onReport={(reason, note) => aiFeedback.addReport(createAiFeedback({
+              id: `feedback-${crypto.randomUUID()}`,
+              pageId: fixture.id,
+              object,
+              transaction,
+              reason,
+              note,
+              contentSnapshot: learningObjectAdapter.toPlainText(object, { includeAnswer: true }),
+              createdAt: Date.now(),
+            }))}
+            onClose={() => setProvenanceObjectId(undefined)}
+          />
+        );
+      })()}
 
       <div className="canvas-viewport" ref={rootRef} data-tool={tool}>
         {size.width > 0 && size.height > 0 && (
@@ -2345,9 +2342,9 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
           {handwritingNotice && <p>{handwritingNotice}</p>}
         </div>
 
-        <div className="canvas-status" aria-live="polite">
-          <span>{tool === "eraser" ? "Whole-stroke eraser" : tool === "pen-pro" ? "Pen Pro: pause to neaten your writing" : tool === "text" ? "Text: click to type, or drag to size a box" : `${TOOL_LABELS[tool]} tool`}</span>
-          {touchMode === "palm" && activeContacts.length > 0 && (
+        <p className="visually-hidden" aria-live="polite">{TOOL_LABELS[tool]} tool</p>
+        {touchMode === "palm" && activeContacts.length > 0 && (
+          <div className="canvas-status">
             <span>
               {activeContacts.length === 1 ? "contact" : "contacts"}{" "}
               {[...activeContacts]
@@ -2355,11 +2352,8 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
                 .map((contact) => `${Math.round(contact.size)}px${contact.pointerId === inkingPointerId() ? " (inking)" : ""}`)
                 .join(", ")}
             </span>
-          )}
-          <span>{strokes.length} strokes</span>
-          <span>{objects.length} objects</span>
-          <span>Wheel: pan · Ctrl/⌘+wheel: canvas zoom</span>
-        </div>
+          </div>
+        )}
       </div>
     </section>
   );

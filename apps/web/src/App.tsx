@@ -7,6 +7,7 @@ import { KonvaPrototype, type CanvasInsertOutcome, type CanvasInsertRequest } fr
 const ChatDock = lazy(() => import("./components/chat/ChatDock").then((module) => ({ default: module.ChatDock })));
 import { useMediaQuery } from "./components/useMediaQuery";
 import { PageSidebar } from "./components/PageSidebar";
+import { NotebookBar } from "./components/NotebookBar";
 import type { AiTransactionRecord, NotebookObject } from "./domain/notebook";
 import { createNotebookPage, movePage, pageFromFixture, renamePage, replacePageObjects, setPagePaper, type NotebookPage } from "./domain/pages";
 import type { PaperStyle } from "./domain/paper";
@@ -22,6 +23,25 @@ import { createWriterLease, type WriterLeaseStatus, type WriterLockManager } fro
 import { registerNotebookServiceWorker, type NotebookServiceWorker } from "./pwa/serviceWorkerRegistration";
 import { canActivateAppUpdate, hasUncommittedNotebookChanges } from "./pwa/updatePolicy";
 
+const PAGES_PINNED_KEY = "ai-notebook:pages-open";
+
+/** Whether the page list was left open on this device. A preference only, so storage failures fall back to closed. */
+function readPagesPinned() {
+  try {
+    return window.localStorage.getItem(PAGES_PINNED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function writePagesPinned(open: boolean) {
+  try {
+    window.localStorage.setItem(PAGES_PINNED_KEY, String(open));
+  } catch {
+    // Not remembering the preference is harmless.
+  }
+}
+
 export function App() {
   const [pages, setPages] = useState<NotebookPage[]>([]);
   const [activePageId, setActivePageId] = useState("");
@@ -29,20 +49,46 @@ export function App() {
   const [canRestore, setCanRestore] = useState(false);
   const [canvasGeneration, setCanvasGeneration] = useState(0);
   const [libraryGeneration, setLibraryGeneration] = useState(0);
-  // Below 900px the page list is a drawer; see styles.css.
+  // The page list starts closed so the canvas gets the whole window. Wide
+  // screens dock it beside the canvas and remember the choice on this device;
+  // below 900px it is a drawer over the canvas and always starts closed.
   const narrowLayout = useMediaQuery("(max-width: 900px)");
-  const [pagesOpen, setPagesOpen] = useState(false);
+  const [pagesOpen, setPagesOpen] = useState(() => !window.matchMedia("(max-width: 900px)").matches && readPagesPinned());
   const [chatOpen, setChatOpen] = useState(false);
-  const pagesToggleRef = useRef<HTMLButtonElement>(null);
   const sidebarSlotRef = useRef<HTMLDivElement>(null);
-  // Off-screen on a narrow layout, the list is inert: out of the tab order and
-  // the accessibility tree. React 18 has no `inert` prop, so it is set directly.
+  const focusPagesOnOpenRef = useRef(false);
+  // A closed list is inert: out of the tab order and the accessibility tree.
+  // React 18 has no `inert` prop, so it is set directly.
   useEffect(() => {
     const slot = sidebarSlotRef.current;
     if (!slot) return;
-    slot.inert = narrowLayout && !pagesOpen;
-    if (narrowLayout && pagesOpen) slot.querySelector<HTMLElement>(".page-link[aria-current='page'], .page-link")?.focus();
+    slot.inert = !pagesOpen;
+    if (pagesOpen && focusPagesOnOpenRef.current) slot.querySelector<HTMLElement>(".page-link[aria-current='page'], .page-link")?.focus();
+    focusPagesOnOpenRef.current = false;
+  }, [pagesOpen]);
+  useEffect(() => {
+    if (!narrowLayout) writePagesPinned(pagesOpen);
   }, [narrowLayout, pagesOpen]);
+  const togglePages = useCallback(() => {
+    setPagesOpen((open) => {
+      focusPagesOnOpenRef.current = !open;
+      return !open;
+    });
+  }, []);
+  const closePages = () => {
+    setPagesOpen(false);
+    document.querySelector<HTMLElement>(".notebook-bar [aria-controls='page-sidebar']")?.focus();
+  };
+  useEffect(() => {
+    const toggleOnShortcut = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === "\\") {
+        event.preventDefault();
+        togglePages();
+      }
+    };
+    window.addEventListener("keydown", toggleOnShortcut);
+    return () => window.removeEventListener("keydown", toggleOnShortcut);
+  }, [togglePages]);
   const [transferStatus, setTransferStatus] = useState<string>();
   const [writerStatus, setWriterStatus] = useState<WriterLeaseStatus>("checking");
   const [saveError, setSaveError] = useState<string>();
@@ -470,6 +516,11 @@ export function App() {
   };
 
   const activePage = pages.find((page) => page.id === activePageId);
+  // The window title names the page too, since a phone-width canvas has no room for it.
+  const activeTitle = activePage?.title;
+  useEffect(() => {
+    document.title = activeTitle ? `${activeTitle} · AI Notebook` : "AI Notebook";
+  }, [activeTitle]);
   const updateCanApply = canActivateAppUpdate(saveStatus);
 
   const applyAppUpdate = () => {
@@ -482,80 +533,33 @@ export function App() {
   };
 
   return (
-    <main className="app-shell" data-chat-open={chatOpen}>
+    <main className="app-shell" data-chat-open={chatOpen} data-pages-open={pagesOpen}>
       <button type="button" className="pages-backdrop" data-open={narrowLayout && pagesOpen} aria-label="Close the page list" tabIndex={-1} onClick={() => setPagesOpen(false)} />
       <div
         className="page-sidebar-slot"
         ref={sidebarSlotRef}
-        data-open={narrowLayout && pagesOpen}
+        data-open={pagesOpen}
         onKeyDown={(event) => {
-          if (event.key === "Escape" && narrowLayout && pagesOpen) {
-            setPagesOpen(false);
-            pagesToggleRef.current?.focus();
-          }
+          if (event.key === "Escape" && pagesOpen && !(event.target as HTMLElement).closest("input")) closePages();
         }}
       >
       <PageSidebar
         pages={pages}
         activePageId={activePageId}
-        saveStatus={saveStatus}
-        saveError={saveError}
-        storageSummary={storageSummary}
-        canRestore={canRestore}
-        transferStatus={transferStatus}
         writerStatus={writerStatus}
         onCreate={createPage}
         onOpen={(pageId) => {
           setActivePageId(pageId);
-          setPagesOpen(false);
+          if (narrowLayout) setPagesOpen(false);
         }}
         onRename={renameNotebookPage}
         onReorder={reorderNotebookPage}
         onDelete={deleteNotebookPage}
-        onRestore={restoreActivePage}
-        onExport={(scope) => { void exportNotebook(scope); }}
-        onExportPage={(format) => { void exportActivePage(format); }}
-        onImport={(file) => { void importNotebook(file); }}
-        onTakeOver={() => writerLeaseRef.current?.takeOver()}
+        onClose={closePages}
       />
       </div>
 
       <div className="notebook-workspace">
-        <header className="app-header">
-          <button
-            ref={pagesToggleRef}
-            type="button"
-            className="pages-toggle"
-            aria-expanded={pagesOpen}
-            onClick={() => setPagesOpen((open) => !open)}
-          >
-            <span aria-hidden="true">☰</span> Pages
-          </button>
-          <div>
-            <p className="eyebrow">Reliable offline notebook · Phase 1</p>
-            <h1>{activePage?.title ?? "Opening notebook…"}</h1>
-            <p>Konva canvas rendering with accessible React learning cards.</p>
-          </div>
-          <div className="app-header__badges">
-            <span className="network-badge" data-online={isOnline}>{isOnline ? "Online" : "Offline"}</span>
-            <div className="engine-badge">Konva hybrid</div>
-          </div>
-        </header>
-
-        {updateStatus === "ready" && (
-          <aside className="app-update-banner" role="status">
-            <span>{updateCanApply ? "An application update is ready." : "An update is ready and will wait until notebook changes are saved."}</span>
-            <button type="button" onClick={applyAppUpdate} disabled={!updateCanApply}>Update and reload</button>
-          </aside>
-        )}
-        {updateStatus === "applying" && <aside className="app-update-banner" role="status">Applying the saved update…</aside>}
-        {updateStatus === "error" && <aside className="app-update-banner app-update-banner--error" role="alert">Offline update error: {updateError}</aside>}
-
-        <aside className="experiment-banner">
-          <strong>Editable learning objects are live.</strong>
-          <span>Create notes, shapes, and content-hashed images; then resize, connect, or group them with local persistence.</span>
-        </aside>
-
         {activePage && (
           <KonvaPrototype
             key={`${activePage.id}:${canvasGeneration}`}
@@ -565,9 +569,41 @@ export function App() {
             insertRequest={canvasInsert}
             onInsertRequestHandled={handleCanvasInsert}
             onPaperChange={setActivePagePaper}
+            leading={(
+              <NotebookBar
+                title={activePage.title}
+                activePageId={activePageId}
+                pagesOpen={pagesOpen}
+                onTogglePages={togglePages}
+                onRename={(title) => renameNotebookPage(activePage.id, title)}
+                saveStatus={saveStatus}
+                saveError={saveError}
+                storageSummary={storageSummary}
+                canRestore={canRestore}
+                transferStatus={transferStatus}
+                onDismissTransferStatus={() => setTransferStatus(undefined)}
+                isOnline={isOnline}
+                writerStatus={writerStatus}
+                onTakeOver={() => writerLeaseRef.current?.takeOver()}
+                onRestore={restoreActivePage}
+                onExport={(scope) => { void exportNotebook(scope); }}
+                onExportPage={(format) => { void exportActivePage(format); }}
+                onImport={(file) => { void importNotebook(file); }}
+              />
+            )}
           />
         )}
+        {!activePage && <p className="notebook-loading" role="status">Opening notebook…</p>}
       </div>
+
+      {updateStatus === "ready" && (
+        <aside className="app-notice" role="status">
+          <span>{updateCanApply ? "An application update is ready." : "An update is ready and will wait until notebook changes are saved."}</span>
+          <button type="button" onClick={applyAppUpdate} disabled={!updateCanApply}>Update and reload</button>
+        </aside>
+      )}
+      {updateStatus === "applying" && <aside className="app-notice" role="status">Applying the saved update…</aside>}
+      {updateStatus === "error" && <aside className="app-notice app-notice--error" role="alert">Offline update error: {updateError}</aside>}
 
       <Suspense fallback={null}>
       <ChatDock
