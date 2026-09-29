@@ -212,7 +212,7 @@ export async function createStaticPageSvg(page: NotebookPage, assets: AssetRecor
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${bounds.left} ${bounds.top} ${width} ${height}" role="img" aria-label="${escapeXml(page.title)}"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#537188"/></marker></defs><rect x="${bounds.left}" y="${bounds.top}" width="${width}" height="${height}" fill="#fbfaf5"/>${paperSvg(page)}${connectors}${shapes}${images}${diagramGroups}${cards}${inkTexts}${texts}${highlighters}${pens}</svg>`;
 }
 
-export function safeExportFilename(title: string, extension: "svg" | "png" = "svg"): string {
+export function safeExportFilename(title: string, extension: "svg" | "png" | "ainotebook" = "svg"): string {
   const slug = title.normalize("NFKD").replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "").toLowerCase();
   return `${slug || "notebook-page"}.${extension}`;
 }

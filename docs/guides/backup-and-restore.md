@@ -10,9 +10,14 @@ In the browser that opened the app, in IndexedDB, for that one site address. Tha
 
 The sidebar shows how much storage the notebook uses. If the browser refuses a write (for example because storage is full), the status says so and the change is **not** marked "Saved".
 
-## Making a backup
+## Archiving one page or backing up everything
 
-Sidebar → **Archive** (available once everything is saved) downloads a `.ainotebook` file. It contains:
+The sidebar has two buttons, both available once everything is saved:
+
+- **Archive page** downloads only the page you have open, named after it (for example `forces-and-motion.ainotebook`). It carries that page's objects, images, quiz answers, AI reports and AI provenance. It does **not** include uploaded sources or the chat history, which belong to the whole notebook.
+- **Back up all** downloads the whole notebook as `ai-notebook-<date>.ainotebook`. Use it for backups and for moving to another device.
+
+A whole-notebook backup contains:
 
 - every page with its objects, paper choice and AI provenance;
 - every image, stored once by content hash;

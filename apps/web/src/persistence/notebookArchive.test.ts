@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ImageObject, InkTextObject } from "../domain/notebook";
 import { pageFromFixture } from "../domain/pages";
 import { phaseZeroFixture } from "../fixtures/phaseZeroFixture";
-import type { ArchivedSource } from "./archiveLibrary";
+import { pageArchiveLibrary, type ArchivedSource } from "./archiveLibrary";
 import type { AssetRecord, ChatMessageRecord } from "./notebookDatabase";
 import type { QuizAttemptRecord } from "../domain/quizAttempts";
 import { createNotebookArchive, readNotebookArchive } from "./notebookArchive";
@@ -393,5 +393,34 @@ describe(".ainotebook paper", () => {
     const page = { ...pageFromFixture(phaseZeroFixture, 100), paper: "grid" as const };
     expect((await readNotebookArchive(await createNotebookArchive([page], []))).pages[0].paper).toBe("grid");
     await expect(createNotebookArchive([{ ...page, paper: "dotted" as never }], [])).rejects.toThrow(/unknown paper style/);
+  });
+});
+
+describe("archiving one page", () => {
+  it("carries only that page with its own answers and reports, not the notebook-wide sources and chat", async () => {
+    const page = pageFromFixture(phaseZeroFixture, 100);
+    const other = { ...pageFromFixture(phaseZeroFixture, 200), id: "other-page", title: "Other" };
+    const attempt = (id: string, pageId: string): QuizAttemptRecord => ({ id, pageId, quizId: "quiz-force", quizRevision: 1, chosenOptionId: "option-half", correct: true, sequence: 1, answeredAt: 5 });
+    const report = (id: string, pageId: string) => ({
+      id, pageId, objectId: "concept-card", objectRevision: 1, transactionId: "t", requestId: "r", intent: "explain_selection" as const,
+      provider: "p", model: "m", configurationId: "c", reason: "incorrect" as const, contentSnapshot: "x", createdAt: 1,
+    });
+    const library = pageArchiveLibrary({
+      sources: [{
+        source: { id: "s", name: "book.txt", kind: "text", size: 4, contentHash: "e".repeat(64), chunkCount: 1, characterCount: 4, enabled: true, addedAt: 1 },
+        chunks: [{ id: "s:0", sourceId: "s", ordinal: 0, text: "text" }],
+      }],
+      chatMessages: [{ id: "m", role: "user", content: "hi", createdAt: 1 }],
+      quizAttempts: [attempt("mine", page.id), attempt("theirs", other.id)],
+      aiFeedback: [report("mine", page.id), report("theirs", other.id)],
+    }, page.id);
+
+    const imported = await readNotebookArchive(await createNotebookArchive([page], [], undefined, library));
+    expect(imported.pages).toHaveLength(1);
+    expect(imported.pages[0].title).toBe(page.title);
+    expect(imported.quizAttempts).toHaveLength(1);
+    expect(imported.aiFeedback).toHaveLength(1);
+    expect(imported.sources).toEqual([]);
+    expect(imported.chatMessages).toEqual([]);
   });
 });

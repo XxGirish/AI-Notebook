@@ -210,6 +210,20 @@ export function validateAiFeedback(value: unknown, pageIds: ReadonlySet<string>)
   });
 }
 
+/**
+ * The library for an archive of one page: that page's quiz answers and AI
+ * reports. Uploaded sources and the chat history belong to the whole notebook,
+ * not to a page, so they travel only in a whole-notebook backup.
+ */
+export function pageArchiveLibrary(library: NotebookLibrary, pageId: string): NotebookLibrary {
+  return {
+    sources: [],
+    chatMessages: [],
+    quizAttempts: (library.quizAttempts ?? []).filter((attempt) => attempt.pageId === pageId),
+    aiFeedback: (library.aiFeedback ?? []).filter((report) => report.pageId === pageId),
+  };
+}
+
 export type LibraryRemap = {
   /** Allocates a fresh id with the given prefix that has not been used in this import. */
   allocate: (prefix: string) => string;

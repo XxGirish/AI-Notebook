@@ -17,7 +17,7 @@ type Props = {
   onReorder: (pageId: string, toIndex: number) => void;
   onDelete: (pageId: string) => void;
   onRestore: () => void;
-  onExport: () => void;
+  onExport: (scope: "page" | "all") => void;
   onExportPage: (format: "svg" | "png" | "print") => void;
   onImport: (file: File) => void;
   onTakeOver: () => void;
@@ -189,7 +189,8 @@ export function PageSidebar({ pages, activePageId, saveStatus, saveError, storag
       </div>
 
       <div className="notebook-transfer" aria-label="Notebook transfer">
-        <button type="button" onClick={onExport} disabled={saveStatus !== "saved"}>Archive</button>
+        <button type="button" onClick={() => onExport("page")} disabled={saveStatus !== "saved" || !activePageId} title="Download only this page, with its images and quiz answers, as an .ainotebook file">Archive page</button>
+        <button type="button" onClick={() => onExport("all")} disabled={saveStatus !== "saved"} title="Download every page plus uploaded sources and chat history, to back up or move the whole notebook">Back up all</button>
         <button type="button" onClick={() => onExportPage("svg")} disabled={!activePageId} title="Download this page as a scalable SVG">Page SVG</button>
         <button type="button" onClick={() => onExportPage("png")} disabled={!activePageId} title="Download this page as a PNG image">Page PNG</button>
         <button type="button" onClick={() => onExportPage("print")} disabled={!activePageId} title="Print this page, or save it as PDF from the print dialog">Print</button>

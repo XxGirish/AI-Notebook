@@ -14,6 +14,7 @@ import { phaseZeroFixture } from "./fixtures/phaseZeroFixture";
 import { createStaticPageSvg, getStaticPageBounds, safeExportFilename } from "./export/staticPageExport";
 import { printSvg, svgToPngBlob } from "./export/rasterExport";
 import { createNotebookArchive, MAX_ARCHIVE_BYTES, NOTEBOOK_ARCHIVE_MIME, readNotebookArchive } from "./persistence/notebookArchive";
+import { pageArchiveLibrary } from "./persistence/archiveLibrary";
 import { cleanupOrphanAssets, deletePage, hasRecoverySnapshot, loadAssets, loadLibrary, loadPages, loadSources, restorePreviousPage, savePage, savePageOrder, storeImportedNotebook } from "./persistence/notebookDatabase";
 import { PageWriteConflictError } from "./persistence/pageRecords";
 import { formatStorageEstimate, storageFailureMessage } from "./persistence/storageHealth";
@@ -371,23 +372,29 @@ export function App() {
     );
   };
 
-  const exportNotebook = async () => {
+  /**
+   * "page" archives only the active page with its answers and reports; "all"
+   * is a full backup that also carries uploaded sources and the chat history.
+   */
+  const exportNotebook = async (scope: "page" | "all") => {
+    const pagesToExport = scope === "page"
+      ? pagesRef.current.filter((page) => page.id === activePageIdRef.current)
+      : pagesRef.current;
+    if (pagesToExport.length === 0) return;
     setTransferStatus("Preparing export…");
     try {
-      const assetHashes = pagesRef.current.flatMap((page) => page.objects.filter((object) => object.kind === "image").map((object) => object.assetHash));
-      const [assets, library] = await Promise.all([loadAssets(assetHashes), loadLibrary()]);
-      const archive = await createNotebookArchive(pagesRef.current, assets, undefined, library);
+      const assetHashes = pagesToExport.flatMap((page) => page.objects.filter((object) => object.kind === "image").map((object) => object.assetHash));
+      const [assets, fullLibrary] = await Promise.all([loadAssets(assetHashes), loadLibrary()]);
+      const library = scope === "page" ? pageArchiveLibrary(fullLibrary, pagesToExport[0].id) : fullLibrary;
+      const archive = await createNotebookArchive(pagesToExport, assets, undefined, library);
       const archiveBuffer = archive.buffer.slice(archive.byteOffset, archive.byteOffset + archive.byteLength) as ArrayBuffer;
-      const blob = new Blob([archiveBuffer], { type: NOTEBOOK_ARCHIVE_MIME });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `ai-notebook-${new Date().toISOString().slice(0, 10)}.ainotebook`;
-      document.body.append(link);
-      link.click();
-      link.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
-      setTransferStatus(`Exported ${pagesRef.current.length} page${pagesRef.current.length === 1 ? "" : "s"}`);
+      const filename = scope === "page"
+        ? safeExportFilename(pagesToExport[0].title, "ainotebook")
+        : `ai-notebook-${new Date().toISOString().slice(0, 10)}.ainotebook`;
+      downloadBlob(new Blob([archiveBuffer], { type: NOTEBOOK_ARCHIVE_MIME }), filename);
+      setTransferStatus(scope === "page"
+        ? `Archived “${pagesToExport[0].title}”`
+        : `Backed up ${pagesToExport.length} page${pagesToExport.length === 1 ? "" : "s"} with sources and chat`);
     } catch (error) {
       setTransferStatus(error instanceof Error ? error.message : "Notebook export failed");
     }
@@ -505,7 +512,7 @@ export function App() {
         onReorder={reorderNotebookPage}
         onDelete={deleteNotebookPage}
         onRestore={restoreActivePage}
-        onExport={() => { void exportNotebook(); }}
+        onExport={(scope) => { void exportNotebook(scope); }}
         onExportPage={(format) => { void exportActivePage(format); }}
         onImport={(file) => { void importNotebook(file); }}
         onTakeOver={() => writerLeaseRef.current?.takeOver()}

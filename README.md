@@ -23,7 +23,7 @@ Notebooks live in your browser. Writing, editing, saving, undo and answering sto
 
 **Keeping your work**
 - Saved to IndexedDB after every change, with an honest saving/saved/error status, one recoverable previous version per page, storage-quota warnings, and one writable tab at a time (others are read-only until they take over).
-- `.ainotebook` archives carry every page, image, uploaded source, chat message, quiz answer, AI report and AI provenance, with integrity hashes; importing creates an independent copy. Pages can also be exported as SVG, including off-screen content.
+- **Archive page** saves just the open page (with its images, quiz answers and AI provenance) as an `.ainotebook` file; **Back up all** saves every page plus uploaded sources and chat history. Archives carry integrity hashes, and importing creates an independent copy. Pages can also be exported as SVG, including off-screen content.
 - A service worker caches the app for offline use and applies updates only when your work is saved and you ask for a reload.
 
 ## Run it
