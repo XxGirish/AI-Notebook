@@ -6,6 +6,7 @@ import type {
   TextCardObject,
 } from "../domain/notebook";
 import { learningObjectAdapter } from "../domain/learningObjectAdapters";
+import { quizHintOptionId, strongerAssistance, type QuizAssistance } from "../domain/quizAttempts";
 import { renderEquation } from "./equationRender";
 
 type Position = { x: number; y: number };
@@ -28,7 +29,7 @@ type Props = {
   onEditEquation: (title: string, latex: string) => void;
   onEditQuiz: (prompt: string, options: QuizOption[], correctOptionId: string, rationale: string) => void;
   /** Called with the chosen option when a quiz is answered, so the attempt can be recorded. */
-  onAnswerQuiz?: (optionId: string) => void;
+  onAnswerQuiz?: (optionId: string, assistance?: QuizAssistance) => void;
   /** A short account of earlier answers to this quiz, if any. */
   attemptHistory?: string;
   attemptError?: string;
@@ -44,6 +45,8 @@ export function LearningCard({ object, position, size, cameraScale, selected, re
   const [draftOptions, setDraftOptions] = useState<QuizOption[]>(object.kind === "quiz-card" ? object.options : []);
   const [draftCorrectOptionId, setDraftCorrectOptionId] = useState(object.kind === "quiz-card" ? object.correctOptionId : "");
   const [draftRationale, setDraftRationale] = useState(object.kind === "quiz-card" ? object.rationale : "");
+  const [assistance, setAssistance] = useState<QuizAssistance>();
+  const hintOptionId = useMemo(() => (object.kind === "quiz-card" ? quizHintOptionId(object) : undefined), [object]);
   const renderModel = useMemo(() => learningObjectAdapter.render(object), [object]);
   const renderedEquation = useMemo(
     () => renderModel.kind === "equation" ? renderEquation(renderModel.latex) : undefined,
@@ -53,6 +56,13 @@ export function LearningCard({ object, position, size, cameraScale, selected, re
   useEffect(() => {
     if (readOnly) setEditing(false);
   }, [readOnly]);
+
+  // An edited question is a new question: earlier answers and help no longer apply to it.
+  const quizRevision = object.kind === "quiz-card" ? object.revision : undefined;
+  useEffect(() => {
+    setAnswer(undefined);
+    setAssistance(undefined);
+  }, [quizRevision]);
 
   useEffect(() => {
     if (editing) return;
@@ -278,23 +288,38 @@ export function LearningCard({ object, position, size, cameraScale, selected, re
             {renderModel.options.map((option) => {
               const isChosen = answer === option.id;
               const isCorrect = option.id === renderModel.correctOptionId;
-              const state = isChosen ? (isCorrect ? "correct" : "incorrect") : undefined;
+              const isRuledOut = assistance === "hint" && !answer && option.id === hintOptionId;
+              const state = isChosen ? (isCorrect ? "correct" : "incorrect") : assistance === "revealed" && !answer && isCorrect ? "answer" : isRuledOut ? "ruled-out" : undefined;
               return (
                 <button
                   key={option.id}
                   type="button"
                   data-state={state}
                   aria-pressed={isChosen}
+                  disabled={isRuledOut}
                   onClick={() => {
                     setAnswer(option.id);
-                    onAnswerQuiz?.(option.id);
+                    onAnswerQuiz?.(option.id, assistance);
                   }}
                 >
                   {option.label}
+                  {isRuledOut && <span className="quiz-option-note"> — ruled out by the hint</span>}
+                  {state === "answer" && <span className="quiz-option-note"> — the answer</span>}
                 </button>
               );
             })}
           </div>
+          {!answer && assistance !== "revealed" && (
+            <div className="quiz-help">
+              {hintOptionId && assistance !== "hint" && (
+                <button type="button" onClick={() => setAssistance((current) => strongerAssistance(current, "hint"))}>Hint</button>
+              )}
+              <button type="button" onClick={() => setAssistance("revealed")}>Show answer</button>
+            </div>
+          )}
+          {!answer && assistance === "revealed" && (
+            <p className="quiz-feedback" role="status">{renderModel.rationale}</p>
+          )}
           {answer && (
             <p className="quiz-feedback" role="status">
               {answer === renderModel.correctOptionId ? "Correct. " : "Not quite. "}

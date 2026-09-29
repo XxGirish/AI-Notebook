@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { QuizCardObject } from "../domain/notebook";
-import { createQuizAttempt, type QuizAttemptRecord } from "../domain/quizAttempts";
+import { createQuizAttempt, type QuizAssistance, type QuizAttemptRecord } from "../domain/quizAttempts";
 import { addQuizAttempt, loadQuizAttempts } from "../persistence/notebookDatabase";
 
 export type QuizAttemptFailure = { quizId: string; message: string };
@@ -39,8 +39,8 @@ export function useQuizAttempts(pageId: string) {
     };
   }, [pageId]);
 
-  const recordAnswer = useCallback(async (quiz: QuizCardObject, optionId: string) => {
-    const attempt = createQuizAttempt(quiz, pageId, optionId, attemptsRef.current, Date.now(), `attempt-${crypto.randomUUID()}`);
+  const recordAnswer = useCallback(async (quiz: QuizCardObject, optionId: string, assistance?: QuizAssistance) => {
+    const attempt = createQuizAttempt(quiz, pageId, optionId, attemptsRef.current, Date.now(), `attempt-${crypto.randomUUID()}`, assistance);
     publish([...attemptsRef.current, attempt]);
     setFailure((current) => (current?.quizId === quiz.id ? undefined : current));
     try {

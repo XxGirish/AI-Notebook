@@ -25,7 +25,7 @@ import { requestAiDraft, type AiDraftPhase } from "../ai/aiSession";
 import { AI_CANVAS_ACTIONS, AI_REQUEST_PLANS } from "../ai/requestContext";
 import { LearningCard } from "../components/LearningCard";
 import { useQuizAttempts } from "../components/useQuizAttempts";
-import { describeQuizAttempts, summarizeQuizAttempts } from "../domain/quizAttempts";
+import { describeQuizAttempts, summarizeQuizAttempts, type QuizAssistance } from "../domain/quizAttempts";
 import { DiagramLabelEditor } from "../components/DiagramLabelEditor";
 import { InkTextEditor } from "../components/InkTextEditor";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -1901,7 +1901,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
               onEditEquation={(title, latex) => updateEquationCard(card.id, title, latex)}
               onEditQuiz={(prompt, options, correctOptionId, rationale) => updateQuizCard(card.id, prompt, options, correctOptionId, rationale)}
               {...(card.kind === "quiz-card" ? {
-                onAnswerQuiz: (optionId: string) => void quizAttempts.recordAnswer(card, optionId),
+                onAnswerQuiz: (optionId: string, assistance?: QuizAssistance) => void quizAttempts.recordAnswer(card, optionId, assistance),
                 attemptHistory: describeQuizAttempts(summarizeQuizAttempts(card, quizAttempts.attempts)),
                 attemptError: quizAttempts.failure && (quizAttempts.failure.quizId === card.id || quizAttempts.failure.quizId === "") ? quizAttempts.failure.message : undefined,
               } : {})}

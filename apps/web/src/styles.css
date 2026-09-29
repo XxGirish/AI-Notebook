@@ -334,6 +334,11 @@ button { font: inherit; }
 .quiz-options button { padding: 8px 10px; border: 1px solid #d7c6a9; border-radius: 9px; background: white; color: #35474a; text-align: left; cursor: pointer; }
 .quiz-options button[data-state="correct"] { border-color: #35836d; background: #e3f4ec; }
 .quiz-options button[data-state="incorrect"] { border-color: #bf6348; background: #fbe8e2; }
+.quiz-options button[data-state="answer"] { border-color: #35836d; border-style: dashed; background: #eef8f3; }
+.quiz-options button[data-state="ruled-out"] { color: #8a9496; text-decoration: line-through; cursor: default; }
+.quiz-option-note { font-size: 0.78em; text-decoration: none; display: inline; }
+.quiz-help { display: flex; gap: 8px; margin-top: 10px; }
+.quiz-help button { padding: 6px 10px; border: 1px solid #d7c6a9; border-radius: 8px; background: #fbf7ef; color: #35474a; cursor: pointer; font-size: 0.8rem; min-height: 40px; }
 .quiz-feedback { margin-top: 10px !important; color: #303e41 !important; }
 .quiz-history { margin-top: 8px !important; color: #5d6a6d !important; font-size: 0.78rem !important; }
 .quiz-history--error { color: #a3341f !important; }

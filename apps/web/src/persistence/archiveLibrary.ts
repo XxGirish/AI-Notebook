@@ -151,12 +151,13 @@ export function validateQuizAttempts(value: unknown, pageIds: ReadonlySet<string
   const ids = new Set<string>();
   return value.map((attempt): QuizAttemptRecord => {
     if (!isRecord(attempt)) fail("the quiz attempt list contains a non-object entry");
-    assertOnlyKeys(attempt, ["id", "pageId", "quizId", "quizRevision", "chosenOptionId", "correct", "sequence", "answeredAt"], "quiz attempt");
+    assertOnlyKeys(attempt, ["id", "pageId", "quizId", "quizRevision", "chosenOptionId", "correct", "sequence", "answeredAt", "assistance"], "quiz attempt");
     if (!isString(attempt.id, 200) || ids.has(attempt.id)) fail("a quiz attempt has a missing or duplicate id");
     ids.add(attempt.id);
     if (!isString(attempt.pageId, 200) || !pageIds.has(attempt.pageId)) fail(`quiz attempt ${attempt.id} belongs to a page that is not in the archive`);
     if (!isString(attempt.quizId, 200) || !isString(attempt.chosenOptionId, 200) || typeof attempt.correct !== "boolean") fail(`quiz attempt ${attempt.id} is malformed`);
     if (!isPositiveInteger(attempt.quizRevision) || !isPositiveInteger(attempt.sequence) || !isFiniteNumber(attempt.answeredAt)) fail(`quiz attempt ${attempt.id} has an invalid version, sequence or time`);
+    if (attempt.assistance !== undefined && attempt.assistance !== "hint" && attempt.assistance !== "revealed") fail(`quiz attempt ${attempt.id} has an invalid assistance value`);
     return {
       id: attempt.id,
       pageId: attempt.pageId,
@@ -166,6 +167,7 @@ export function validateQuizAttempts(value: unknown, pageIds: ReadonlySet<string
       correct: attempt.correct,
       sequence: attempt.sequence,
       answeredAt: attempt.answeredAt,
+      ...(attempt.assistance !== undefined ? { assistance: attempt.assistance as QuizAttemptRecord["assistance"] } : {}),
     };
   });
 }

@@ -17,7 +17,27 @@ export type QuizAttemptRecord = {
   /** 1 for the first answer to this revision of the quiz, 2 for the first retry, and so on. */
   sequence: number;
   answeredAt: number;
+  /** The most help seen on this version of the quiz before answering; absent when there was none. */
+  assistance?: QuizAssistance;
 };
+
+/** A hint rules out one wrong option; a reveal shows the answer key and rationale. */
+export type QuizAssistance = "hint" | "revealed";
+
+export const strongerAssistance = (current: QuizAssistance | undefined, next: QuizAssistance): QuizAssistance => (current === "revealed" ? current : next);
+
+/**
+ * A local hint that needs no request: one wrong option to rule out. With only
+ * two options that would give the answer away, so there is no hint. The
+ * choice is stable for a given question, so reopening the card shows the same
+ * hint rather than letting repeated hints eliminate every wrong answer.
+ */
+export function quizHintOptionId(quiz: QuizCardObject): string | undefined {
+  const wrong = quiz.options.filter((option) => option.id !== quiz.correctOptionId);
+  if (quiz.options.length < 3 || wrong.length === 0) return undefined;
+  const seed = [...`${quiz.id}:${quiz.revision}`].reduce((hash, character) => (hash * 31 + character.charCodeAt(0)) >>> 0, 7);
+  return wrong[seed % wrong.length].id;
+}
 
 export function gradeQuizAnswer(quiz: QuizCardObject, optionId: string): boolean {
   if (!quiz.options.some((option) => option.id === optionId)) throw new Error(`Option ${optionId} is not part of quiz ${quiz.id}`);
@@ -33,6 +53,7 @@ export function createQuizAttempt(
   previous: readonly QuizAttemptRecord[],
   answeredAt: number,
   id: string,
+  assistance?: QuizAssistance,
 ): QuizAttemptRecord {
   return {
     id,
@@ -43,6 +64,7 @@ export function createQuizAttempt(
     correct: gradeQuizAnswer(quiz, optionId),
     sequence: previous.filter(sameVersion(quiz)).length + 1,
     answeredAt,
+    ...(assistance ? { assistance } : {}),
   };
 }
 
@@ -51,6 +73,8 @@ export type QuizAttemptSummary = {
   attempts: number;
   /** Whether the first answer to this version was right; undefined before any answer. */
   firstTryCorrect?: boolean;
+  /** Help seen before the first answer, which qualifies what that answer shows. */
+  firstTryAssistance?: QuizAssistance;
   /** Answers given before the question was last edited, which say nothing about this version. */
   earlierVersionAttempts: number;
   lastAnsweredAt?: number;
@@ -67,6 +91,7 @@ export function summarizeQuizAttempts(quiz: QuizCardObject, attempts: readonly Q
   return {
     attempts: current.length,
     firstTryCorrect: current[0]?.correct,
+    ...(current[0]?.assistance ? { firstTryAssistance: current[0].assistance } : {}),
     earlierVersionAttempts: forQuiz.length - current.length,
     lastAnsweredAt: forQuiz.reduce<number | undefined>((latest, attempt) => (latest === undefined || attempt.answeredAt > latest ? attempt.answeredAt : latest), undefined),
   };
@@ -75,7 +100,10 @@ export function summarizeQuizAttempts(quiz: QuizCardObject, attempts: readonly Q
 export function describeQuizAttempts(summary: QuizAttemptSummary): string | undefined {
   const parts: string[] = [];
   if (summary.attempts > 0) {
-    parts.push(`First try ${summary.firstTryCorrect ? "correct" : "incorrect"}`);
+    // An answer given after the key was shown is practice, not evidence, so it gets no right/wrong label.
+    parts.push(summary.firstTryAssistance === "revealed"
+      ? "Answered after seeing the answer"
+      : `First try ${summary.firstTryCorrect ? "correct" : "incorrect"}${summary.firstTryAssistance === "hint" ? " with a hint" : ""}`);
     if (summary.attempts > 1) parts.push(`${summary.attempts - 1} ${summary.attempts === 2 ? "retry" : "retries"}`);
   }
   if (summary.earlierVersionAttempts > 0) {

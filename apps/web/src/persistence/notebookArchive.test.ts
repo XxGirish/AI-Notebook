@@ -308,7 +308,7 @@ describe(".ainotebook quiz attempts", () => {
       chatMessages: [],
       quizAttempts: [
         attempt("a1"),
-        attempt("a2", { chosenOptionId: "option-half", correct: true, sequence: 2, answeredAt: 60 }),
+        attempt("a2", { chosenOptionId: "option-half", correct: true, sequence: 2, answeredAt: 60, assistance: "hint" }),
         // An answer to a quiz that was later deleted, with an option that no longer exists.
         attempt("a3", { quizId: "quiz-deleted", chosenOptionId: "option-gone", answeredAt: 70 }),
         attempt("a4", { quizId: "quiz-deleted", chosenOptionId: "option-gone", sequence: 2, answeredAt: 80 }),
@@ -326,7 +326,8 @@ describe(".ainotebook quiz attempts", () => {
     const [first, second, deletedFirst, deletedSecond] = imported.quizAttempts;
     expect(first).toMatchObject({ pageId: imported.pages[0].id, quizId: quiz.id, correct: false, sequence: 1 });
     expect(labelOf(first.chosenOptionId)).toBe("It doubles");
-    expect(second.chosenOptionId).toBe(quiz.correctOptionId);
+    expect(second).toMatchObject({ chosenOptionId: quiz.correctOptionId, assistance: "hint" });
+    expect(first).not.toHaveProperty("assistance");
     expect(new Set(imported.quizAttempts.map((entry) => entry.id)).size).toBe(4);
     expect(imported.quizAttempts.map((entry) => entry.id)).not.toContain("a1");
     // The deleted quiz keeps one consistent stand-in identity across its answers.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { QuizCardObject } from "./notebook";
-import { createQuizAttempt, describeQuizAttempts, gradeQuizAnswer, summarizeQuizAttempts, type QuizAttemptRecord } from "./quizAttempts";
+import { createQuizAttempt, describeQuizAttempts, gradeQuizAnswer, quizHintOptionId, strongerAssistance, summarizeQuizAttempts, type QuizAttemptRecord } from "./quizAttempts";
 
 const quiz: QuizCardObject = {
   id: "quiz-1",
@@ -65,5 +65,29 @@ describe("quiz attempts", () => {
     const attempts = answer(other, "speed", [], 1);
     expect(summarizeQuizAttempts(quiz, attempts).attempts).toBe(0);
     expect(createQuizAttempt(quiz, "page-1", "speed", attempts, 2, "x").sequence).toBe(1);
+  });
+
+  it("offers a hint only when ruling out a wrong option still leaves a real choice", () => {
+    expect(quizHintOptionId(quiz)).toBeUndefined();
+    const three = { ...quiz, options: [...quiz.options, { id: "mass", label: "Mass" }] };
+    const hint = quizHintOptionId(three);
+    expect(hint).toBeDefined();
+    expect(hint).not.toBe(three.correctOptionId);
+    // Stable for one version of the question, so asking again cannot eliminate more options.
+    expect(quizHintOptionId({ ...three })).toBe(hint);
+  });
+
+  it("keeps the strongest help seen and qualifies the first try by it", () => {
+    expect(strongerAssistance(undefined, "hint")).toBe("hint");
+    expect(strongerAssistance("hint", "revealed")).toBe("revealed");
+    expect(strongerAssistance("revealed", "hint")).toBe("revealed");
+
+    const hinted = [createQuizAttempt(quiz, "page-1", "velocity", [], 1, "a", "hint")];
+    expect(hinted[0].assistance).toBe("hint");
+    expect(describeQuizAttempts(summarizeQuizAttempts(quiz, hinted))).toBe("First try correct with a hint");
+
+    const revealed = [createQuizAttempt(quiz, "page-1", "velocity", [], 1, "a", "revealed")];
+    expect(describeQuizAttempts(summarizeQuizAttempts(quiz, revealed))).toBe("Answered after seeing the answer");
+    expect(createQuizAttempt(quiz, "page-1", "velocity", [], 1, "a")).not.toHaveProperty("assistance");
   });
 });
