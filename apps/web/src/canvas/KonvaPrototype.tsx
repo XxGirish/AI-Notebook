@@ -14,6 +14,7 @@ import type {
   NotebookFixture,
   NotebookObject,
   PointSample,
+  QuizCardObject,
   QuizOption,
   ShapeObject,
   StrokeObject,
@@ -26,6 +27,7 @@ import { AI_CANVAS_ACTIONS, AI_REQUEST_PLANS } from "../ai/requestContext";
 import { LearningCard } from "../components/LearningCard";
 import { useQuizAttempts } from "../components/useQuizAttempts";
 import { describeQuizAttempts, summarizeQuizAttempts, type QuizAssistance } from "../domain/quizAttempts";
+import { describeRecency, QUIZ_REVIEW_LABELS, reviewQuizzes, summarizeReview } from "../domain/quizReview";
 import { DiagramLabelEditor } from "../components/DiagramLabelEditor";
 import { InkTextEditor } from "../components/InkTextEditor";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -68,7 +70,7 @@ import {
   TEXT_LINE_HEIGHT,
   TEXT_PADDING,
 } from "./textBox";
-import { wheelDeltaInPixels, wheelZoomScale, zoomCameraAt, type Camera } from "./cameraMath";
+import { cameraCentredOn, wheelDeltaInPixels, wheelZoomScale, zoomCameraAt, type Camera } from "./cameraMath";
 
 /** Text the chat panel asked to place on this page, as one editable card. */
 export type CanvasInsertRequest = { id: string; title: string; body: string; provider: string; model: string };
@@ -178,6 +180,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
   const [tool, setTool] = useState<Tool>("select");
   const [history, setHistory] = useState(() => createHistory(fixture.objects));
   const quizAttempts = useQuizAttempts(fixture.id);
+  const [pendingFocusId, setPendingFocusId] = useState<string>();
   const [camera, setCamera] = useState<Camera>({ x: 24, y: 24, scale: 0.86 });
   const [penSize, setPenSize] = useState(4.5);
   const [highlighterSize, setHighlighterSize] = useState(22);
@@ -252,6 +255,14 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
   const connectables = useMemo(() => [...nodes, ...shapes, ...images], [nodes, shapes, images]);
   const connectableById = useMemo(() => new Map(connectables.map((object) => [object.id, object])), [connectables]);
   const linearReadingItems = useMemo(() => buildLinearReadingItems(objects), [objects]);
+  const quizReview = useMemo(() => {
+    // Quizzes in reading order, so ties in the review keep the page's own order.
+    const readingIndex = new Map(linearReadingItems.map((item, index) => [item.id, index]));
+    const quizzes = objects
+      .filter((object): object is QuizCardObject => object.kind === "quiz-card")
+      .sort((left, right) => (readingIndex.get(left.id) ?? 0) - (readingIndex.get(right.id) ?? 0));
+    return reviewQuizzes(quizzes, quizAttempts.attempts);
+  }, [objects, linearReadingItems, quizAttempts.attempts]);
 
   useEffect(() => () => {
     window.clearTimeout(handwritingTimerRef.current);
@@ -1354,6 +1365,25 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
   };
 
   const resetCamera = () => setCamera({ x: 24, y: 24, scale: 0.86 });
+
+  /** Brings an object into the middle of the view, selects it and moves keyboard focus into it. */
+  const goToObject = (id: string) => {
+    const target = objects.find((object) => object.id === id);
+    if (!target) return;
+    setTool("select");
+    setCamera((current) => cameraCentredOn(current, { ...positionFor(target), ...sizeFor(target) }, size));
+    selectObject(id);
+    setPendingFocusId(id);
+  };
+
+  // Focus moves once the card is rendered where the camera now puts it.
+  useEffect(() => {
+    if (!pendingFocusId) return;
+    setPendingFocusId(undefined);
+    const card = rootRef.current?.querySelector<HTMLElement>(`[data-object-id="${CSS.escape(pendingFocusId)}"]`);
+    const target = card?.querySelector<HTMLElement>(".quiz-options button:not(:disabled)") ?? card?.querySelector<HTMLElement>("button:not(.learning-card__handle)");
+    target?.focus({ preventScroll: true });
+  }, [pendingFocusId]);
   const inputActive = tool !== "select" && (!readOnly || tool === "pan");
   // Memoized so the stroke layer's props stay equal while nothing about strokes changes.
   const visibleStrokes = useMemo(
@@ -1569,6 +1599,26 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
             onSave={(text) => saveInkText(inkTextBeingEdited.id, text)}
             onRestoreInk={() => restoreInkText(inkTextBeingEdited.id)}
           />
+        )}
+
+        {quizReview.length > 0 && (
+          <details className="linear-reading-view quiz-review">
+            <summary>Quiz review · {summarizeReview(quizReview)}</summary>
+            <ol>
+              {quizReview.map((item) => (
+                <li key={item.quizId} data-status={item.status}>
+                  <span className="quiz-review__status">{QUIZ_REVIEW_LABELS[item.status]}</span>
+                  <span className="quiz-review__prompt">{item.prompt}</span>
+                  <span className="quiz-review__meta">
+                    {item.lastAnsweredAt !== undefined
+                      ? `${item.attempts > 0 ? `${item.attempts} answer${item.attempts === 1 ? "" : "s"}, ` : ""}last ${describeRecency(item.lastAnsweredAt, Date.now())}`
+                      : ""}
+                  </span>
+                  <button type="button" onClick={() => goToObject(item.quizId)}>Go to</button>
+                </li>
+              ))}
+            </ol>
+          </details>
         )}
 
         <details className="linear-reading-view">

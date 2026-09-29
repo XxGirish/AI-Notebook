@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_ZOOM, MIN_ZOOM, wheelDeltaInPixels, wheelZoomScale, zoomCameraAt } from "./cameraMath";
+import { cameraCentredOn, MAX_ZOOM, MIN_ZOOM, wheelDeltaInPixels, wheelZoomScale, zoomCameraAt } from "./cameraMath";
 
 describe("canvas camera", () => {
   it("keeps the world point under the pointer fixed while zooming", () => {
@@ -26,5 +26,14 @@ describe("canvas camera", () => {
     expect(wheelDeltaInPixels(2, 1, 500)).toBe(32);
     expect(wheelDeltaInPixels(2, 2, 500)).toBe(1000);
     expect(wheelDeltaInPixels(2, 0, 500)).toBe(2);
+  });
+});
+
+describe("centring on an object", () => {
+  it("keeps the zoom and moves the box's middle to the viewport's middle", () => {
+    const camera = cameraCentredOn({ x: 5, y: 5, scale: 2 }, { x: 100, y: 50, width: 40, height: 20 }, { width: 800, height: 600 });
+    expect(camera.scale).toBe(2);
+    expect(120 * camera.scale + camera.x).toBe(400);
+    expect(60 * camera.scale + camera.y).toBe(300);
   });
 });

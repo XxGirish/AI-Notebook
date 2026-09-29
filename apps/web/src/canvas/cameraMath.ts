@@ -24,3 +24,12 @@ export function wheelDeltaInPixels(delta: number, deltaMode: number, viewportHei
 export function wheelZoomScale(currentScale: number, deltaYInPixels: number) {
   return currentScale * Math.exp(-deltaYInPixels * 0.0025);
 }
+
+/** The camera, at its current zoom, that puts the middle of a world-space box in the middle of the viewport. */
+export function cameraCentredOn(camera: Camera, box: { x: number; y: number; width: number; height: number }, viewport: { width: number; height: number }): Camera {
+  return {
+    scale: camera.scale,
+    x: viewport.width / 2 - (box.x + box.width / 2) * camera.scale,
+    y: viewport.height / 2 - (box.y + box.height / 2) * camera.scale,
+  };
+}

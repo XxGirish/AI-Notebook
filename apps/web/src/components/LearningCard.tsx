@@ -163,6 +163,7 @@ export function LearningCard({ object, position, size, cameraScale, selected, re
     <article
       className={`learning-card learning-card--${object.kind}`}
       data-selected={selected}
+      data-object-id={object.id}
       style={style}
       onPointerDown={(event) => onSelect(event.shiftKey)}
     >
