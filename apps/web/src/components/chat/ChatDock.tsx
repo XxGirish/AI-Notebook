@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { citedPassageIds } from "@ai-notebook/ai-contract";
 import type { NotebookPage } from "../../domain/pages";
 import { answerForCanvas, buildChatRequest, citedPageSources } from "../../ai/chatRequest";
@@ -32,6 +33,8 @@ type Props = {
   readOnly: boolean;
   onAddToPage: (answer: { title: string; body: string; provider: string; model: string; sources?: Array<{ id: string; revision: number; contentHash?: string }> }) => Promise<ChatInsertOutcome>;
   onOpenPage: (pageId: string) => void;
+  /** Lets the page make room for the open panel instead of sitting under it. */
+  onOpenChange: (open: boolean) => void;
   /** Changes when sources or chat were written outside the panel, such as by an import. */
   libraryGeneration: number;
 };
@@ -74,7 +77,7 @@ function OrbIcon() {
   );
 }
 
-export function ChatDock({ pages, activePageId, isOnline, readOnly, onAddToPage, onOpenPage, libraryGeneration }: Props) {
+export function ChatDock({ pages, activePageId, isOnline, readOnly, onAddToPage, onOpenPage, onOpenChange, libraryGeneration }: Props) {
   const [open, setOpen] = useState(() => readFlag(OPEN_KEY, false));
   const [tab, setTab] = useState<"chat" | "sources">("chat");
   const [messages, setMessages] = useState<ChatMessageRecord[]>([]);
@@ -91,6 +94,7 @@ export function ChatDock({ pages, activePageId, isOnline, readOnly, onAddToPage,
   const [addStatus, setAddStatus] = useState<Record<string, string>>({});
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState<string>();
+  const [fullscreenHost, setFullscreenHost] = useState<Element | null>(() => document.fullscreenElement);
 
   const retrieverRef = useRef(new NotebookRetriever());
   const loadingRef = useRef<Promise<void>>();
@@ -133,6 +137,17 @@ export function ChatDock({ pages, activePageId, isOnline, readOnly, onAddToPage,
     loadingRef.current = undefined;
     void ensureLoaded();
   }, [libraryGeneration, ensureLoaded]);
+
+  useEffect(() => {
+    onOpenChange(open);
+  }, [open, onOpenChange]);
+
+  // Only the full-screen element's subtree is shown in full screen, so the panel follows it there.
+  useEffect(() => {
+    const follow = () => setFullscreenHost(document.fullscreenElement);
+    document.addEventListener("fullscreenchange", follow);
+    return () => document.removeEventListener("fullscreenchange", follow);
+  }, []);
 
   useEffect(() => {
     writeFlag(OPEN_KEY, open);
@@ -248,10 +263,12 @@ export function ChatDock({ pages, activePageId, isOnline, readOnly, onAddToPage,
     setSources(next);
   };
 
-  const addFiles = async (files: FileList | File[]) => {
+  const addFiles = async (fileList: FileList | File[]) => {
+    // Copy before the first await: the picker's list is emptied when its input is reset, and a drop's when the event ends.
+    const files = Array.from(fileList);
     if (readOnly) return;
     await ensureLoaded();
-    for (const file of Array.from(files)) {
+    for (const file of files) {
       const uploadId = newId("upload");
       setUploads((current) => [...current, { id: uploadId, name: file.name }]);
       try {
@@ -325,8 +342,11 @@ export function ChatDock({ pages, activePageId, isOnline, readOnly, onAddToPage,
     }
   };
 
+  // State lives in this component, so moving the rendered panel between hosts keeps the chat and draft.
+  const place = (node: ReactNode) => (fullscreenHost ? createPortal(node, fullscreenHost) : node);
+
   if (!open) {
-    return (
+    return place(
       <button
         ref={orbRef}
         type="button"
@@ -337,7 +357,7 @@ export function ChatDock({ pages, activePageId, isOnline, readOnly, onAddToPage,
         title="Study assistant"
       >
         <OrbIcon />
-      </button>
+      </button>,
     );
   }
 
@@ -346,7 +366,7 @@ export function ChatDock({ pages, activePageId, isOnline, readOnly, onAddToPage,
   const liveIds = new Set(streaming?.passages.map((passage) => passage.id) ?? []);
   const disclosure = `Your question and up to 12 matching passages from ${enabledSourceIds.size} ${enabledSourceIds.size === 1 ? "source" : "sources"}${includeNotes ? " and your notebook pages" : ""} are sent to DeepSeek.`;
 
-  return (
+  return place(
     <aside
       className="chat-dock"
       aria-label="Study assistant"
@@ -547,6 +567,6 @@ export function ChatDock({ pages, activePageId, isOnline, readOnly, onAddToPage,
         </section>
       )}
       {dragging && <div className="chat-drop-overlay" aria-hidden="true">Drop files to add them as sources</div>}
-    </aside>
+    </aside>,
   );
 }

@@ -32,6 +32,7 @@ export function App() {
   // Below 900px the page list is a drawer; see styles.css.
   const narrowLayout = useMediaQuery("(max-width: 900px)");
   const [pagesOpen, setPagesOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
   const pagesToggleRef = useRef<HTMLButtonElement>(null);
   const sidebarSlotRef = useRef<HTMLDivElement>(null);
   // Off-screen on a narrow layout, the list is inert: out of the tab order and
@@ -481,7 +482,7 @@ export function App() {
   };
 
   return (
-    <main className="app-shell">
+    <main className="app-shell" data-chat-open={chatOpen}>
       <button type="button" className="pages-backdrop" data-open={narrowLayout && pagesOpen} aria-label="Close the page list" tabIndex={-1} onClick={() => setPagesOpen(false)} />
       <div
         className="page-sidebar-slot"
@@ -576,6 +577,7 @@ export function App() {
         readOnly={writerStatus !== "writer"}
         onAddToPage={addChatAnswerToPage}
         onOpenPage={setActivePageId}
+        onOpenChange={setChatOpen}
         libraryGeneration={libraryGeneration}
       />
       </Suspense>

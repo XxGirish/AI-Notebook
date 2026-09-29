@@ -20,12 +20,26 @@ button { font: inherit; }
 .app-update-banner--error { border-color: #d49a8c; color: #8d392d; background: #fcebe7; }
 .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0 0 0 0) !important; white-space: nowrap !important; border: 0 !important; }
 
+:root { --chat-dock-width: min(400px, calc(100vw - 28px)); }
+
 .app-shell {
   min-height: 100vh;
   padding: 14px;
   display: grid;
   grid-template-columns: 248px minmax(0, 1fr);
   gap: 14px;
+}
+
+/* Wide screens: the open study assistant docks beside the page, which shrinks to make room.
+   Narrower screens keep it as an overlay, since docking would leave too little canvas. */
+@media (min-width: 1100px) {
+  :root { --chat-dock-width: clamp(320px, 28vw, 400px); }
+  .app-shell { transition: padding-right 180ms ease-out; }
+  .app-shell[data-chat-open="true"] { padding-right: calc(var(--chat-dock-width) + 28px); }
+  .app-shell[data-chat-open="true"] :is(.prototype:fullscreen, .prototype[data-fullscreen-fallback="true"]) { padding-right: calc(var(--chat-dock-width) + 24px); }
+}
+@media (min-width: 1100px) and (prefers-reduced-motion: reduce) {
+  .app-shell { transition: none; }
 }
 
 .notebook-workspace {
