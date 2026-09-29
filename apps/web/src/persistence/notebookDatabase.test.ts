@@ -16,6 +16,7 @@ import {
   loadQuizAttempts,
   addAiFeedback,
   loadAiFeedback,
+  savePageOrder,
 } from "./notebookDatabase";
 import { PageWriteConflictError } from "./pageRecords";
 
@@ -307,5 +308,20 @@ describe("AI feedback (database version 7)", () => {
 
     await deletePage(page.id, page.updatedAt);
     expect(await loadAiFeedback(page.id)).toEqual([]);
+  });
+});
+
+describe("page order (database version 8)", () => {
+  it("loads pages in the saved order, with pages added later at the end", async () => {
+    const first = newPage("First");
+    const second = newPage("Second");
+    const third = newPage("Third");
+    for (const page of [first, second, third]) await savePage(page);
+    await savePageOrder([third.id, first.id, second.id]);
+    const later = newPage("Later");
+    await savePage(later);
+
+    const titles = (await loadPages()).map((page) => page.title);
+    expect(titles.filter((title) => ["First", "Second", "Third", "Later"].includes(title))).toEqual(["Third", "First", "Second", "Later"]);
   });
 });

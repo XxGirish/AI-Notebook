@@ -3,11 +3,11 @@ import { KonvaPrototype, type CanvasInsertOutcome, type CanvasInsertRequest } fr
 import { ChatDock } from "./components/chat/ChatDock";
 import { PageSidebar } from "./components/PageSidebar";
 import type { AiTransactionRecord, NotebookObject } from "./domain/notebook";
-import { createNotebookPage, pageFromFixture, renamePage, replacePageObjects, type NotebookPage } from "./domain/pages";
+import { createNotebookPage, movePage, pageFromFixture, renamePage, replacePageObjects, type NotebookPage } from "./domain/pages";
 import { phaseZeroFixture } from "./fixtures/phaseZeroFixture";
 import { createStaticPageSvg, safeExportFilename } from "./export/staticPageExport";
 import { createNotebookArchive, MAX_ARCHIVE_BYTES, NOTEBOOK_ARCHIVE_MIME, readNotebookArchive } from "./persistence/notebookArchive";
-import { cleanupOrphanAssets, deletePage, hasRecoverySnapshot, loadAssets, loadLibrary, loadPages, loadSources, restorePreviousPage, savePage, storeImportedNotebook } from "./persistence/notebookDatabase";
+import { cleanupOrphanAssets, deletePage, hasRecoverySnapshot, loadAssets, loadLibrary, loadPages, loadSources, restorePreviousPage, savePage, savePageOrder, storeImportedNotebook } from "./persistence/notebookDatabase";
 import { PageWriteConflictError } from "./persistence/pageRecords";
 import { formatStorageEstimate, storageFailureMessage } from "./persistence/storageHealth";
 import { createWriterLease, type WriterLeaseStatus, type WriterLockManager } from "./persistence/writerLease";
@@ -249,6 +249,23 @@ export function App() {
     persist(renamed, current.updatedAt);
   };
 
+  /** Moves a page in the sidebar; the order is saved like any other change, with an honest status. */
+  const reorderNotebookPage = (pageId: string, toIndex: number) => {
+    if (writerStatus !== "writer") return;
+    const next = movePage(pagesRef.current, pageId, toIndex);
+    if (next.every((page, index) => page.id === pagesRef.current[index].id)) return;
+    replacePages(next);
+    const sequence = ++saveSequenceRef.current;
+    setSaveStatus("saving");
+    setSaveError(undefined);
+    void savePageOrder(next.map((page) => page.id)).then(
+      () => {
+        if (saveSequenceRef.current === sequence) setSaveStatus("saved");
+      },
+      (error) => handleWriteFailure(error, sequence),
+    );
+  };
+
   const deleteNotebookPage = (pageId: string) => {
     if (writerStatus !== "writer") return;
     const index = pagesRef.current.findIndex((page) => page.id === pageId);
@@ -427,6 +444,7 @@ export function App() {
         onCreate={createPage}
         onOpen={setActivePageId}
         onRename={renameNotebookPage}
+        onReorder={reorderNotebookPage}
         onDelete={deleteNotebookPage}
         onRestore={restoreActivePage}
         onExport={() => { void exportNotebook(); }}

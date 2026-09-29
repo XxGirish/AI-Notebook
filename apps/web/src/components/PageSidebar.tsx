@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { NotebookPage } from "../domain/pages";
+import { movePage, type NotebookPage } from "../domain/pages";
 import type { WriterLeaseStatus } from "../persistence/writerLease";
 
 type Props = {
@@ -14,6 +14,7 @@ type Props = {
   onCreate: () => void;
   onOpen: (pageId: string) => void;
   onRename: (pageId: string, title: string) => void;
+  onReorder: (pageId: string, toIndex: number) => void;
   onDelete: (pageId: string) => void;
   onRestore: () => void;
   onExport: () => void;
@@ -22,11 +23,36 @@ type Props = {
   onTakeOver: () => void;
 };
 
-export function PageSidebar({ pages, activePageId, saveStatus, saveError, storageSummary, canRestore, transferStatus, writerStatus, onCreate, onOpen, onRename, onDelete, onRestore, onExport, onExportPage, onImport, onTakeOver }: Props) {
+export function PageSidebar({ pages, activePageId, saveStatus, saveError, storageSummary, canRestore, transferStatus, writerStatus, onCreate, onOpen, onRename, onReorder, onDelete, onRestore, onExport, onExportPage, onImport, onTakeOver }: Props) {
   const [renamingId, setRenamingId] = useState<string>();
   const [deletingId, setDeletingId] = useState<string>();
   const [draftTitle, setDraftTitle] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLElement>(null);
+  // While a page is dragged the list shows where it will land.
+  const [dragging, setDragging] = useState<{ pageId: string; toIndex: number }>();
+  // Pointer events can arrive faster than renders, so the drag itself lives in a ref.
+  const dragRef = useRef<{ pageId: string; toIndex: number }>();
+  const [moveAnnouncement, setMoveAnnouncement] = useState("");
+  const canEdit = writerStatus === "writer";
+  const shownPages = dragging ? movePage(pages, dragging.pageId, dragging.toIndex) : pages;
+
+  /** The index a dragged page would take if dropped at this height. */
+  const dropIndexAt = (clientY: number, pageId: string) => {
+    const rows = [...(listRef.current?.querySelectorAll<HTMLElement>(".page-row") ?? [])].filter((row) => row.dataset.pageId !== pageId);
+    const before = rows.findIndex((row) => {
+      const rect = row.getBoundingClientRect();
+      return clientY < rect.top + rect.height / 2;
+    });
+    return before === -1 ? rows.length : before;
+  };
+
+  const moveByKeyboard = (page: NotebookPage, index: number, delta: number) => {
+    const toIndex = Math.max(0, Math.min(pages.length - 1, index + delta));
+    if (toIndex === index) return;
+    onReorder(page.id, toIndex);
+    setMoveAnnouncement(`${page.title} moved to position ${toIndex + 1} of ${pages.length}`);
+  };
   const archiveInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -62,9 +88,52 @@ export function PageSidebar({ pages, activePageId, saveStatus, saveError, storag
         <button type="button" className="new-page-button" onClick={onCreate} aria-label="Create new page" disabled={writerStatus !== "writer"}>+</button>
       </div>
 
-      <nav className="page-list" aria-label="Page history">
-        {pages.map((page) => (
-          <div className="page-row" data-active={page.id === activePageId} data-confirming={deletingId === page.id} key={page.id}>
+      <nav className="page-list" aria-label="Page history" ref={listRef}>
+        {shownPages.map((page, index) => (
+          <div className="page-row" data-page-id={page.id} data-active={page.id === activePageId} data-confirming={deletingId === page.id} data-dragging={dragging?.pageId === page.id} key={page.id}>
+            <button
+              type="button"
+              className="page-drag-handle"
+              aria-label={`Reorder ${page.title}, position ${index + 1} of ${pages.length}. Use the up and down arrow keys.`}
+              title="Drag to reorder, or focus and use the arrow keys"
+              disabled={!canEdit}
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+                event.preventDefault();
+                moveByKeyboard(page, index, event.key === "ArrowUp" ? -1 : 1);
+              }}
+              onPointerDown={(event) => {
+                if (!canEdit || event.button !== 0) return;
+                event.preventDefault();
+                try {
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                } catch {
+                  // A pointer that already ended cannot be captured; the drag still runs.
+                }
+                dragRef.current = { pageId: page.id, toIndex: index };
+                setDragging(dragRef.current);
+              }}
+              onPointerMove={(event) => {
+                const drag = dragRef.current;
+                if (drag?.pageId !== page.id) return;
+                const toIndex = dropIndexAt(event.clientY, page.id);
+                if (toIndex === drag.toIndex) return;
+                dragRef.current = { pageId: page.id, toIndex };
+                setDragging(dragRef.current);
+              }}
+              onPointerUp={(event) => {
+                const drag = dragRef.current;
+                dragRef.current = undefined;
+                setDragging(undefined);
+                if (drag?.pageId === page.id) onReorder(page.id, dropIndexAt(event.clientY, page.id));
+              }}
+              onPointerCancel={() => {
+                dragRef.current = undefined;
+                setDragging(undefined);
+              }}
+            >
+              <span aria-hidden="true">â ¿</span>
+            </button>
             {renamingId === page.id ? (
               <input
                 ref={inputRef}
@@ -104,6 +173,7 @@ export function PageSidebar({ pages, activePageId, saveStatus, saveError, storag
           </div>
         ))}
       </nav>
+      <p className="visually-hidden" role="status" aria-live="polite">{moveAnnouncement}</p>
 
       <div className="writer-state" data-state={writerStatus} role="status">
         <span>

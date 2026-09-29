@@ -1,6 +1,6 @@
 import Dexie, { type EntityTable, type Table, type Transaction } from "dexie";
 import type { NotebookObject } from "../domain/notebook";
-import type { NotebookPage } from "../domain/pages";
+import { orderPages, type NotebookPage } from "../domain/pages";
 import type { AiFeedbackRecord } from "../domain/aiFeedback";
 import type { QuizAttemptRecord } from "../domain/quizAttempts";
 import { orphanAssetHashes } from "./assetCleanup";
@@ -67,6 +67,8 @@ export type ChatMessageRecord = {
   model?: string;
 };
 
+type SettingRecord = { key: "pageOrder"; value: string[] };
+
 class NotebookDatabase extends Dexie {
   pages!: EntityTable<PageMetadataRecord, "id">;
   pageObjects!: Table<PageObjectRecord, PageObjectKey>;
@@ -77,6 +79,7 @@ class NotebookDatabase extends Dexie {
   chatMessages!: EntityTable<ChatMessageRecord, "id">;
   quizAttempts!: EntityTable<QuizAttemptRecord, "id">;
   aiFeedback!: EntityTable<AiFeedbackRecord, "id">;
+  settings!: EntityTable<SettingRecord, "key">;
 
   constructor(name = "ai-notebook") {
     super(name);
@@ -138,6 +141,19 @@ class NotebookDatabase extends Dexie {
       chatMessages: "id, createdAt",
       quizAttempts: "id, pageId, answeredAt",
       aiFeedback: "id, pageId, createdAt",
+    });
+    // Version 8 adds small notebook-wide settings, starting with the page order.
+    this.version(8).stores({
+      pages: "id, createdAt, updatedAt",
+      pageObjects: "[pageId+objectId], pageId, kind",
+      recoverySnapshots: "pageId, capturedAt",
+      assets: "hash, createdAt",
+      sources: "id, addedAt, contentHash",
+      sourceChunks: "id, sourceId",
+      chatMessages: "id, createdAt",
+      quizAttempts: "id, pageId, answeredAt",
+      aiFeedback: "id, pageId, createdAt",
+      settings: "key",
     });
   }
 }
@@ -201,9 +217,10 @@ async function applyObjectWrites(writes: PageObjectWrites): Promise<void> {
 }
 
 export async function loadPages(): Promise<NotebookPage[]> {
-  const [metadataRows, objectRows] = await Promise.all([
+  const [metadataRows, objectRows, orderSetting] = await Promise.all([
     database.pages.orderBy("createdAt").toArray(),
     database.pageObjects.toArray(),
+    database.settings.get("pageOrder"),
   ]);
   const rowsByPage = new Map<string, PageObjectRecord[]>();
   for (const row of objectRows) {
@@ -212,9 +229,9 @@ export async function loadPages(): Promise<NotebookPage[]> {
     else rowsByPage.set(row.pageId, [row]);
   }
 
-  const pages = metadataRows.map((metadata) => (
+  const pages = orderPages(metadataRows.map((metadata) => (
     migratePersistedPage(assemblePage(metadata, rowsByPage.get(metadata.id) ?? []))
-  ));
+  )), orderSetting?.value ?? []);
   savedObjects.clear();
   for (const page of pages) rememberSavedObjects(page);
   return pages;
@@ -482,6 +499,11 @@ export async function loadQuizAttempts(pageId: string): Promise<QuizAttemptRecor
  */
 export async function addQuizAttempt(attempt: QuizAttemptRecord): Promise<void> {
   await database.quizAttempts.add(structuredClone(attempt));
+}
+
+/** Saves the writer's page order. Pages added later simply follow it. */
+export async function savePageOrder(pageIds: string[]): Promise<void> {
+  await database.settings.put({ key: "pageOrder", value: [...pageIds] });
 }
 
 export async function loadChatMessages(): Promise<ChatMessageRecord[]> {
