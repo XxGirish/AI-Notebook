@@ -17,7 +17,7 @@ type ObjectBase = {
 
 export type GeneratedContentProvenance = {
   requestId: string;
-  intent: "teach_section" | "explain_selection" | "create_diagram" | "create_equation" | "create_quiz";
+  intent: "teach_section" | "explain_selection" | "create_diagram" | "create_equation" | "create_quiz" | "chat_answer";
   provider: string;
   model: string;
   configurationId: string;
