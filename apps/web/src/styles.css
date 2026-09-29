@@ -461,3 +461,5 @@ button:focus-visible { outline: 3px solid #ef8c45; outline-offset: 2px; }
 .quiz-review__prompt { grid-column: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .quiz-review__meta { grid-column: 1; color: #5d6a6d; font-size: 0.74rem; }
 .quiz-review li button { grid-column: 2; grid-row: 1 / span 3; min-height: 40px; padding: 6px 12px; border: 1px solid #d7c6a9; border-radius: 8px; background: #fbf7ef; color: #35474a; cursor: pointer; }
+.learning-card__stale { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0 0 10px !important; padding: 8px 10px; border: 1px solid #e3b98f; border-radius: 9px; background: #fff4e3; color: #7a4520 !important; font-size: 0.78rem !important; line-height: 1.4; }
+.learning-card__stale button { min-height: 36px; padding: 4px 10px; border: 1px solid #d49a67; border-radius: 8px; background: white; color: #7a4520; cursor: pointer; font-size: 0.78rem; }

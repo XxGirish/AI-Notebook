@@ -68,8 +68,10 @@ describe("AI request context", () => {
     const near = textCard("near", { x: 20, y: 20 });
     const far = textCard("far", { x: 4_000, y: 4_000 });
     const selected = textCard("selected", { x: 9_000, y: 9_000 });
-    const { request } = build([near, far, selected], ["selected"]);
+    const { request, sources } = build([near, far, selected], ["selected"]);
     expect(request.context.map((item) => item.id)).toEqual(["selected", "near", "far"]);
+    // Only what the writer chose is marked, so edits to neighbours never make a result stale.
+    expect(sources.filter((source) => source.selected).map((source) => source.id)).toEqual(["selected"]);
   });
 
   it("collects graph nodes and their connectors into one diagram item", () => {
@@ -81,9 +83,10 @@ describe("AI request context", () => {
     expect(item.nodes.map((node) => node.label)).toEqual(["Start", "End"]);
     expect(item.edges).toEqual([{ fromId: "node-1", toId: "node-2", label: "then" }]);
     // Provenance covers every node whose text was sent.
+    // Selecting one node selects its diagram, so every node it sent is part of what was chosen.
     expect(sources).toEqual([
-      { id: "node-1", revision: 2 },
-      { id: "node-2", revision: 2 },
+      { id: "node-1", revision: 2, selected: true },
+      { id: "node-2", revision: 2, selected: true },
     ]);
   });
 

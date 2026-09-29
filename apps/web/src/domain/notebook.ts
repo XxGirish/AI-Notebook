@@ -22,7 +22,12 @@ export type GeneratedContentProvenance = {
   model: string;
   configurationId: string;
   proposalSchemaVersion: number;
-  sources: Array<{ id: string; revision: number; contentHash?: string }>;
+  /**
+   * Everything sent as context. `selected` marks what the writer chose, as
+   * opposed to nearby context; `contentHash` fingerprints its meaning when it
+   * was sent, so a later edit (but not a move) can mark the result stale.
+   */
+  sources: Array<{ id: string; revision: number; contentHash?: string; selected?: boolean }>;
 };
 
 export type AiTransactionRecord = GeneratedContentProvenance & {

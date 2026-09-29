@@ -26,6 +26,7 @@ import { requestAiDraft, type AiDraftPhase } from "../ai/aiSession";
 import { AI_CANVAS_ACTIONS, AI_REQUEST_PLANS } from "../ai/requestContext";
 import { LearningCard } from "../components/LearningCard";
 import { useQuizAttempts } from "../components/useQuizAttempts";
+import { useStaleGeneratedObjects } from "../components/useStaleGeneratedObjects";
 import { describeQuizAttempts, summarizeQuizAttempts, type QuizAssistance } from "../domain/quizAttempts";
 import { describeRecency, QUIZ_REVIEW_LABELS, reviewQuizzes, summarizeReview } from "../domain/quizReview";
 import { DiagramLabelEditor } from "../components/DiagramLabelEditor";
@@ -180,6 +181,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
   const [tool, setTool] = useState<Tool>("select");
   const [history, setHistory] = useState(() => createHistory(fixture.objects));
   const quizAttempts = useQuizAttempts(fixture.id);
+  const [aiTransactions, setAiTransactions] = useState(fixture.aiTransactions);
   const [pendingFocusId, setPendingFocusId] = useState<string>();
   const [camera, setCamera] = useState<Camera>({ x: 24, y: 24, scale: 0.86 });
   const [penSize, setPenSize] = useState(4.5);
@@ -255,6 +257,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
   const connectables = useMemo(() => [...nodes, ...shapes, ...images], [nodes, shapes, images]);
   const connectableById = useMemo(() => new Map(connectables.map((object) => [object.id, object])), [connectables]);
   const linearReadingItems = useMemo(() => buildLinearReadingItems(objects), [objects]);
+  const staleObjects = useStaleGeneratedObjects(objects, aiTransactions);
   const quizReview = useMemo(() => {
     // Quizzes in reading order, so ties in the review keep the page's own order.
     const readingIndex = new Map(linearReadingItems.map((item, index) => [item.id, index]));
@@ -379,6 +382,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
     lastNotifiedObjectsRef.current = history.present;
     const transaction = pendingAiTransactionRef.current;
     pendingAiTransactionRef.current = undefined;
+    if (transaction) setAiTransactions((current) => [...current, transaction]);
     onObjectsChange?.(history.present, transaction);
   }, [history.present, onObjectsChange]);
 
@@ -1950,6 +1954,16 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
               onEditText={(title, body) => updateTextCard(card.id, title, body)}
               onEditEquation={(title, latex) => updateEquationCard(card.id, title, latex)}
               onEditQuiz={(prompt, options, correctOptionId, rationale) => updateQuizCard(card.id, prompt, options, correctOptionId, rationale)}
+              {...(staleObjects.has(card.id) ? {
+                stale: {
+                  reason: staleObjects.get(card.id)!.reason,
+                  onSelectSource: staleObjects.get(card.id)!.sourceIds.length > 0 ? () => {
+                    setTool("select");
+                    setFocusedObjectId(undefined);
+                    setSelectedIds(expandGroupedIds(objects, new Set(staleObjects.get(card.id)!.sourceIds)));
+                  } : undefined,
+                },
+              } : {})}
               {...(card.kind === "quiz-card" ? {
                 onAnswerQuiz: (optionId: string, assistance?: QuizAssistance) => void quizAttempts.recordAnswer(card, optionId, assistance),
                 attemptHistory: describeQuizAttempts(summarizeQuizAttempts(card, quizAttempts.attempts)),

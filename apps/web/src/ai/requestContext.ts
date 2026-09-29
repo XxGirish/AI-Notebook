@@ -151,7 +151,7 @@ export type BuildGenerateRequestOptions = {
 export type BuiltGenerateRequest = {
   request: GenerateRequest;
   /** Revisions of everything sent, recorded as the provenance of whatever is committed. */
-  sources: Array<{ id: string; revision: number }>;
+  sources: Array<{ id: string; revision: number; selected?: boolean }>;
 };
 
 /**
@@ -191,17 +191,19 @@ export function buildGenerateRequest(options: BuildGenerateRequestOptions): Buil
     throw new AiRequestError("The selected note is too large to send. Select less of the page and try again.");
   }
 
-  const revisionsById = new Map<string, number>();
-  for (const item of context) {
+  // The context kept is a prefix of the ranked candidates, so each item's selection flag is at the same index.
+  const sources = new Map<string, { id: string; revision: number; selected?: boolean }>();
+  for (const [index, item] of context.entries()) {
+    const selected = ranked[index].selected ? { selected: true } : {};
     if (item.kind === "diagram") {
-      for (const node of item.nodes) revisionsById.set(node.id, node.revision);
+      for (const node of item.nodes) sources.set(node.id, { id: node.id, revision: node.revision, ...selected });
     } else {
-      revisionsById.set(item.id, item.revision);
+      sources.set(item.id, { id: item.id, revision: item.revision, ...selected });
     }
   }
 
   return {
     request: withContext(context),
-    sources: [...revisionsById].map(([id, revision]) => ({ id, revision })),
+    sources: [...sources.values()],
   };
 }

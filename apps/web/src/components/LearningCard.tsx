@@ -7,6 +7,7 @@ import type {
 } from "../domain/notebook";
 import { learningObjectAdapter } from "../domain/learningObjectAdapters";
 import { quizHintOptionId, strongerAssistance, type QuizAssistance } from "../domain/quizAttempts";
+import type { StaleReason } from "../domain/staleness";
 import { renderEquation } from "./equationRender";
 
 type Position = { x: number; y: number };
@@ -33,9 +34,11 @@ type Props = {
   /** A short account of earlier answers to this quiz, if any. */
   attemptHistory?: string;
   attemptError?: string;
+  /** Set when the note this card was generated from has been edited or deleted since. */
+  stale?: { reason: StaleReason; onSelectSource?: () => void };
 };
 
-export function LearningCard({ object, position, size, cameraScale, selected, resizable, readOnly, onSelect, onMove, onMoveEnd, onResize, onResizeEnd, onEditText, onEditEquation, onEditQuiz, onAnswerQuiz, attemptHistory, attemptError }: Props) {
+export function LearningCard({ object, position, size, cameraScale, selected, resizable, readOnly, onSelect, onMove, onMoveEnd, onResize, onResizeEnd, onEditText, onEditEquation, onEditQuiz, onAnswerQuiz, attemptHistory, attemptError, stale }: Props) {
   const [answer, setAnswer] = useState<string>();
   const [editing, setEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState(object.kind === "text-card" || object.kind === "equation-card" ? object.title : "");
@@ -179,6 +182,17 @@ export function LearningCard({ object, position, size, cameraScale, selected, re
 
       {!editing && !readOnly && (
         <button type="button" className="learning-card__edit" onClick={() => setEditing(true)}>Edit</button>
+      )}
+
+      {stale && !editing && (
+        <p className="learning-card__stale" role="note">
+          {stale.reason === "source-deleted"
+            ? "The note this was generated from has been deleted."
+            : "The note this was generated from has changed since."}
+          {stale.onSelectSource && !readOnly && (
+            <button type="button" onClick={stale.onSelectSource}>Select the note to explain again</button>
+          )}
+        </p>
       )}
 
       {object.kind === "text-card" && renderModel.kind === "text" && (

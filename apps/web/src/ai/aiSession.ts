@@ -6,6 +6,7 @@ import {
   type UsageReport,
 } from "@ai-notebook/ai-contract";
 import type { NotebookObject } from "../domain/notebook";
+import { withContentHashes } from "../domain/staleness";
 import { cancelGeneration, describeGatewayError, GatewayError, streamGeneration, type GatewayClientOptions } from "./gatewayClient";
 import { prepareCanvasBatch, type PreparedCanvasBatch } from "./proposalCompiler";
 import { AI_REQUEST_PLANS, AiRequestError, buildGenerateRequest } from "./requestContext";
@@ -68,6 +69,9 @@ export async function requestAiDraft(options: RequestAiDraftOptions): Promise<Ai
     throw error;
   }
 
+  // Fingerprinted from the page as it was sent. The commit rechecks that every
+  // source's revision is unchanged, so these still describe it at commit time.
+  const hashedSources = withContentHashes(built.sources, options.objects);
   const client: GatewayClientOptions = { baseUrl: options.baseUrl, accessToken: options.accessToken, fetchImpl: options.fetchImpl };
   let proposalPayload: unknown;
   let started: { provider: string; model: string; configurationId: string } | undefined;
@@ -140,7 +144,7 @@ export async function requestAiDraft(options: RequestAiDraftOptions): Promise<Ai
         model: started?.model ?? "unknown",
         configurationId: started?.configurationId ?? "unknown",
         proposalSchemaVersion: proposal.schemaVersion,
-        sources: built.sources,
+        sources: await hashedSources,
       },
       selectionBounds: options.selectionBounds,
       viewportCenter: options.viewportCenter,

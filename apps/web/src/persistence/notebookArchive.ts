@@ -187,11 +187,16 @@ function validateAiTransaction(value: unknown): AiTransactionRecord {
     fail(`AI transaction ${value.transactionId} has too many or invalid references`);
   }
   const sources = value.sources.map((source) => {
-    if (!isRecord(source) || !isString(source.id, 200) || !Number.isInteger(source.revision) || (source.revision as number) < 1 || (source.contentHash !== undefined && !isHash(source.contentHash))) {
+    if (!isRecord(source) || !isString(source.id, 200) || !Number.isInteger(source.revision) || (source.revision as number) < 1 || (source.contentHash !== undefined && !isHash(source.contentHash)) || (source.selected !== undefined && source.selected !== true)) {
       fail(`AI transaction ${value.transactionId} has an invalid source`);
     }
-    assertOnlyKeys(source, ["id", "revision", "contentHash"], `AI transaction ${value.transactionId} source`);
-    return { id: source.id, revision: source.revision as number, contentHash: source.contentHash as string | undefined };
+    assertOnlyKeys(source, ["id", "revision", "contentHash", "selected"], `AI transaction ${value.transactionId} source`);
+    return {
+      id: source.id,
+      revision: source.revision as number,
+      contentHash: source.contentHash as string | undefined,
+      ...(source.selected ? { selected: true } : {}),
+    };
   });
   const readIds = (ids: unknown[], label: string) => {
     if (!ids.every((id) => isString(id, 200)) || new Set(ids).size !== ids.length) fail(`AI transaction ${value.transactionId} has invalid ${label}`);

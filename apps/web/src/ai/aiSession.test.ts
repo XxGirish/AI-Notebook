@@ -74,8 +74,10 @@ describe("AI session", () => {
       intent: "teach_section",
       provider: "mock",
       model: "deterministic-fixture",
-      sources: [{ id: "source", revision: 4 }],
+      sources: [{ id: "source", revision: 4, selected: true }],
     });
+    // Each source carries a fingerprint of its content as sent, so a later edit can mark the result stale.
+    expect(outcome.batch.provenance.sources[0].contentHash).toMatch(/^[a-f0-9]{64}$/);
     expect(outcome.usage).toEqual({ promptTokens: 120, completionTokens: 400 });
     expect(phases).toEqual(["sending", "generating", "generating", "preparing"]);
   });
