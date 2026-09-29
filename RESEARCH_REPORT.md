@@ -213,7 +213,7 @@ Use stable JSON Output plus local validation as a fallback. JSON Output requires
 
 The capability spike must check tool-argument reconstruction across streaming chunks, terminal status and usage, keep-alive handling, cancellation, and separation of final payload from reasoning fields. If multi-round thinking/tool use is later added, follow DeepSeek's reasoning-history rules inside the request session rather than placing reasoning traces on the notebook.[^33][^34]
 
-The detailed DeepSeek candidate table and capability probe are in [the AI research memo](C:/Users/Ryzen/Desktop/AINotebook/research/ai-research.md). No model should be declared best from parameter count or an unrelated benchmark. Selection depends on schema validity, teaching correctness, diagram consistency, selected-ink interpretation, response time, and available access.
+The detailed DeepSeek candidate table and capability probe are in [the AI research memo](research/ai-research.md). No model should be declared best from parameter count or an unrelated benchmark. Selection depends on schema validity, teaching correctness, diagram consistency, selected-ink interpretation, response time, and available access.
 
 ### Access, cost, and privacy assumptions
 
@@ -356,7 +356,7 @@ For one experienced developer working approximately full time, the planning esti
 | Subsequent learning release | Selected handwriting interpretation if validated, flashcards, review scheduling, source-grounded PDF lessons | Live continuous AI observation and complex student models |
 | Open-source release | Reproducible setup, BYOK gateway, mock AI mode, documentation, license notices, compatibility matrix, upgrade/restore instructions | A free hosted inference service or automatic SaaS operation |
 
-The detailed implementation sequence, dependencies, and acceptance criteria are in [IMPLEMENTATION_PLAN.md](C:/Users/Ryzen/Desktop/AINotebook/IMPLEMENTATION_PLAN.md).
+The detailed implementation sequence, dependencies, and acceptance criteria are in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
 
 ### Acceptance criteria
 
@@ -397,7 +397,7 @@ The remaining decisions are concrete:
 
 The most valuable first deliverable is the shared-scene prototype plus a mock AI transaction. It can establish whether the notebook remains comfortable to write in while editable learning content, undo, saving, and export behave correctly. DeepSeek integration then connects to an already-defined document system.
 
-For implementation detail, see the supporting [canvas comparison](C:/Users/Ryzen/Desktop/AINotebook/research/canvas-research.md), [AI tool and DeepSeek memo](C:/Users/Ryzen/Desktop/AINotebook/research/ai-research.md), and [storage/deployment memo](C:/Users/Ryzen/Desktop/AINotebook/research/architecture-research.md). The decisions and release scope above take precedence over optional alternatives discussed in those memos.
+For implementation detail, see the supporting [canvas comparison](research/canvas-research.md), [AI tool and DeepSeek memo](research/ai-research.md), and [storage/deployment memo](research/architecture-research.md). The decisions and release scope above take precedence over optional alternatives discussed in those memos.
 
 ## Sources
 

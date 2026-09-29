@@ -4,7 +4,7 @@
 
 Deliver a personal learning notebook that works on desktop and tablet, stores notes locally, transfers complete notebooks through export/import, and uses DeepSeek to create and explain editable content on the canvas. Ordinary writing, saving, and answering stored quizzes must work without AI or network access.
 
-This is a proposed build plan, not work already implemented. Its technical basis and source references are in [RESEARCH_REPORT.md](C:/Users/Ryzen/Desktop/AINotebook/RESEARCH_REPORT.md). The original concept remains in [idea.md](C:/Users/Ryzen/Desktop/AINotebook/idea.md).
+This is a proposed build plan, not work already implemented. Its technical basis and source references are in [RESEARCH_REPORT.md](RESEARCH_REPORT.md). The original concept remains in [idea.md](idea.md).
 
 Selected baseline: React + TypeScript + Vite, Konva + react-konva + perfect-freehand with React HTML learning cards, Dexie/IndexedDB, a small authenticated TypeScript HTTPS gateway, and DeepSeek. The user selected the Konva hybrid on 2026-09-14 after the initial comparison; Excalidraw was removed.
 
