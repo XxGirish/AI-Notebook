@@ -7,7 +7,7 @@ import { createNotebookPage, pageFromFixture, renamePage, replacePageObjects, ty
 import { phaseZeroFixture } from "./fixtures/phaseZeroFixture";
 import { createStaticPageSvg, safeExportFilename } from "./export/staticPageExport";
 import { createNotebookArchive, MAX_ARCHIVE_BYTES, NOTEBOOK_ARCHIVE_MIME, readNotebookArchive } from "./persistence/notebookArchive";
-import { cleanupOrphanAssets, deletePage, hasRecoverySnapshot, loadAssets, loadPages, restorePreviousPage, savePage, storeImportedNotebook } from "./persistence/notebookDatabase";
+import { cleanupOrphanAssets, deletePage, hasRecoverySnapshot, loadAssets, loadLibrary, loadPages, loadSources, restorePreviousPage, savePage, storeImportedNotebook } from "./persistence/notebookDatabase";
 import { PageWriteConflictError } from "./persistence/pageRecords";
 import { formatStorageEstimate, storageFailureMessage } from "./persistence/storageHealth";
 import { createWriterLease, type WriterLeaseStatus, type WriterLockManager } from "./persistence/writerLease";
@@ -20,6 +20,7 @@ export function App() {
   const [saveStatus, setSaveStatus] = useState<"loading" | "saving" | "saved" | "error">("loading");
   const [canRestore, setCanRestore] = useState(false);
   const [canvasGeneration, setCanvasGeneration] = useState(0);
+  const [libraryGeneration, setLibraryGeneration] = useState(0);
   const [transferStatus, setTransferStatus] = useState<string>();
   const [writerStatus, setWriterStatus] = useState<WriterLeaseStatus>("checking");
   const [saveError, setSaveError] = useState<string>();
@@ -328,8 +329,8 @@ export function App() {
     setTransferStatus("Preparing export…");
     try {
       const assetHashes = pagesRef.current.flatMap((page) => page.objects.filter((object) => object.kind === "image").map((object) => object.assetHash));
-      const assets = await loadAssets(assetHashes);
-      const archive = await createNotebookArchive(pagesRef.current, assets);
+      const [assets, library] = await Promise.all([loadAssets(assetHashes), loadLibrary()]);
+      const archive = await createNotebookArchive(pagesRef.current, assets, undefined, library);
       const archiveBuffer = archive.buffer.slice(archive.byteOffset, archive.byteOffset + archive.byteLength) as ArrayBuffer;
       const blob = new Blob([archiveBuffer], { type: NOTEBOOK_ARCHIVE_MIME });
       const url = URL.createObjectURL(blob);
@@ -355,8 +356,10 @@ export function App() {
     setTransferStatus("Validating import…");
     try {
       const existingPageIds = new Set(pagesRef.current.map((page) => page.id));
-      const imported = await readNotebookArchive(new Uint8Array(await file.arrayBuffer()), Date.now(), () => crypto.randomUUID(), existingPageIds);
-      await storeImportedNotebook(imported.pages, imported.assets);
+      const existingSourceIdsByHash = new Map((await loadSources()).map((source) => [source.contentHash, source.id]));
+      const imported = await readNotebookArchive(new Uint8Array(await file.arrayBuffer()), { reservedPageIds: existingPageIds, existingSourceIdsByHash });
+      await storeImportedNotebook(imported.pages, imported.assets, imported);
+      if (imported.sources.length > 0 || imported.chatMessages.length > 0) setLibraryGeneration((current) => current + 1);
       replacePages([...pagesRef.current, ...imported.pages]);
       setActivePageId(imported.pages[0].id);
       setCanvasGeneration((current) => current + 1);
@@ -364,7 +367,11 @@ export function App() {
       setSaveStatus("saved");
       setSaveError(undefined);
       scheduleAssetCleanup();
-      setTransferStatus(`Imported ${imported.pages.length} page${imported.pages.length === 1 ? "" : "s"} as copies`);
+      const librarySummary = [
+        imported.sources.length > 0 ? `${imported.sources.length} source${imported.sources.length === 1 ? "" : "s"}` : "",
+        imported.chatMessages.length > 0 ? `${imported.chatMessages.length} chat message${imported.chatMessages.length === 1 ? "" : "s"}` : "",
+      ].filter(Boolean).join(" and ");
+      setTransferStatus(`Imported ${imported.pages.length} page${imported.pages.length === 1 ? "" : "s"} as copies${librarySummary ? `, with ${librarySummary}` : ""}`);
     } catch (error) {
       setTransferStatus(error instanceof Error ? error.message : "Notebook import failed");
     }
@@ -472,6 +479,7 @@ export function App() {
         readOnly={writerStatus !== "writer"}
         onAddToPage={addChatAnswerToPage}
         onOpenPage={setActivePageId}
+        libraryGeneration={libraryGeneration}
       />
     </main>
   );

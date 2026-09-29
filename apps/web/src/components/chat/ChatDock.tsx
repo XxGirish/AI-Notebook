@@ -31,6 +31,8 @@ type Props = {
   readOnly: boolean;
   onAddToPage: (answer: { title: string; body: string; provider: string; model: string }) => Promise<ChatInsertOutcome>;
   onOpenPage: (pageId: string) => void;
+  /** Changes when sources or chat were written outside the panel, such as by an import. */
+  libraryGeneration: number;
 };
 
 type Streaming = { requestId: string; text: string; passages: RetrievedPassage[]; question: string };
@@ -71,7 +73,7 @@ function OrbIcon() {
   );
 }
 
-export function ChatDock({ pages, activePageId, isOnline, readOnly, onAddToPage, onOpenPage }: Props) {
+export function ChatDock({ pages, activePageId, isOnline, readOnly, onAddToPage, onOpenPage, libraryGeneration }: Props) {
   const [open, setOpen] = useState(() => readFlag(OPEN_KEY, false));
   const [tab, setTab] = useState<"chat" | "sources">("chat");
   const [messages, setMessages] = useState<ChatMessageRecord[]>([]);
@@ -120,6 +122,16 @@ export function ChatDock({ pages, activePageId, isOnline, readOnly, onAddToPage,
   useEffect(() => {
     if (open) void ensureLoaded();
   }, [open, ensureLoaded]);
+
+  // An import wrote sources or messages behind the panel's back: read them again.
+  const seenLibraryGenerationRef = useRef(libraryGeneration);
+  useEffect(() => {
+    if (seenLibraryGenerationRef.current === libraryGeneration) return;
+    seenLibraryGenerationRef.current = libraryGeneration;
+    if (!loadingRef.current) return;
+    loadingRef.current = undefined;
+    void ensureLoaded();
+  }, [libraryGeneration, ensureLoaded]);
 
   useEffect(() => {
     writeFlag(OPEN_KEY, open);

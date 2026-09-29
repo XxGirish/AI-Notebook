@@ -26,7 +26,7 @@ DeepSeek's API (checked 2026-09-29) offers chat completions only — no embeddin
 ## Limitations (not verified or not built)
 
 - Scanned PDFs (no text layer) are refused; there is no OCR. Password-protected PDFs are refused.
-- Original files are not kept, only their text; sources and chat history are **not** in `.ainotebook` archives yet, so they do not transfer between devices.
+- Original files are not kept, only their text. **Update 2026-09-29:** `.ainotebook` archive version 2 now carries each source (record plus passages, one hash-checked `sources/NNNN.json` per file) and the chat history (`chat.json`). Import gives them fresh IDs, skips a source whose file hash is already on the device, and repoints citations at the imported copies; a citation to a page that was not exported keeps its quoted text but loses its link. Version-1 archives still import. Imported chat keeps its original timestamps, so it interleaves with any existing history rather than being appended as a block.
 - Keyword search misses paraphrases with no shared words. Retrieval quality has not been evaluated beyond this smoke test.
 - A cancelled chat is not counted against the daily token budget (the same limitation canvas actions have), although DeepSeek may still bill it.
 - Chat answers added to the page carry no per-source provenance in `sources`; the references are in the card text.

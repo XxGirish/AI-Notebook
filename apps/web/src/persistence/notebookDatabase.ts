@@ -326,12 +326,25 @@ export async function loadAssets(hashes: Iterable<string>): Promise<AssetRecord[
   return records.filter((record): record is AssetRecord => record !== undefined);
 }
 
-export async function storeImportedNotebook(pages: NotebookPage[], assets: AssetRecord[]): Promise<void> {
+export type ImportedLibrary = {
+  sources: { source: SourceRecord; chunks: SourceChunkRecord[] }[];
+  chatMessages: ChatMessageRecord[];
+};
+
+/** Stores an imported copy in one transaction: a failure leaves no page, source or message of it behind. */
+export async function storeImportedNotebook(
+  pages: NotebookPage[],
+  assets: AssetRecord[],
+  library: ImportedLibrary = { sources: [], chatMessages: [] },
+): Promise<void> {
   const split = pages.map(splitPage);
-  await database.transaction("rw", database.pages, database.pageObjects, database.assets, async () => {
+  await database.transaction("rw", [database.pages, database.pageObjects, database.assets, database.sources, database.sourceChunks, database.chatMessages], async () => {
     await database.assets.bulkPut(assets);
     await database.pageObjects.bulkAdd(split.flatMap((page) => page.objects));
     await database.pages.bulkAdd(split.map((page) => page.metadata));
+    await database.sources.bulkAdd(library.sources.map((entry) => entry.source));
+    await database.sourceChunks.bulkAdd(library.sources.flatMap((entry) => entry.chunks));
+    await database.chatMessages.bulkAdd(library.chatMessages);
   });
   for (const page of pages) rememberSavedObjects(page);
 }
@@ -386,6 +399,27 @@ export async function deleteSource(sourceId: string): Promise<void> {
   await database.transaction("rw", database.sources, database.sourceChunks, async () => {
     await database.sourceChunks.where("sourceId").equals(sourceId).delete();
     await database.sources.delete(sourceId);
+  });
+}
+
+/** Every source with its passages, and the chat history, read in one consistent snapshot for export. */
+export async function loadLibrary(): Promise<ImportedLibrary> {
+  return database.transaction("r", database.sources, database.sourceChunks, database.chatMessages, async () => {
+    const [sources, chunks, chatMessages] = await Promise.all([
+      database.sources.orderBy("addedAt").toArray(),
+      database.sourceChunks.toArray(),
+      database.chatMessages.orderBy("createdAt").toArray(),
+    ]);
+    const chunksBySource = new Map<string, SourceChunkRecord[]>();
+    for (const chunk of chunks) {
+      const list = chunksBySource.get(chunk.sourceId);
+      if (list) list.push(chunk);
+      else chunksBySource.set(chunk.sourceId, [chunk]);
+    }
+    return {
+      sources: sources.map((source) => ({ source, chunks: (chunksBySource.get(source.id) ?? []).sort((left, right) => left.ordinal - right.ordinal) })),
+      chatMessages,
+    };
   });
 }
 

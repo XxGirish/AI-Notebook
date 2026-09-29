@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import type { ImageObject, InkTextObject } from "../domain/notebook";
 import { pageFromFixture } from "../domain/pages";
 import { phaseZeroFixture } from "../fixtures/phaseZeroFixture";
-import type { AssetRecord } from "./notebookDatabase";
+import type { ArchivedSource } from "./archiveLibrary";
+import type { AssetRecord, ChatMessageRecord } from "./notebookDatabase";
 import { createNotebookArchive, readNotebookArchive } from "./notebookArchive";
 
 async function assetRecord(bytes: Uint8Array, mimeType = "image/png"): Promise<AssetRecord> {
@@ -53,7 +54,7 @@ describe(".ainotebook archives", () => {
 
     const archive = await createNotebookArchive([page], [asset], "2026-09-15T00:00:00.000Z");
     let nextId = 0;
-    const imported = await readNotebookArchive(archive, 1_000, () => `copy-${++nextId}`);
+    const imported = await readNotebookArchive(archive, { now: 1_000, idFactory: () => `copy-${++nextId}` });
 
     expect(imported.pages).toHaveLength(1);
     expect(imported.assets).toHaveLength(1);
@@ -179,7 +180,117 @@ describe(".ainotebook archives", () => {
       assets: [],
     };
     const archive = zipSync({ "manifest.json": strToU8(JSON.stringify(manifest)), "pages/0000.json": pageBytes });
-    const imported = await readNotebookArchive(archive, 1_000, () => crypto.randomUUID());
+    const imported = await readNotebookArchive(archive, { now: 1_000 });
     expect(imported.pages[0]).toMatchObject({ schemaVersion: 4, aiTransactions: [] });
+    expect(imported).toMatchObject({ sources: [], chatMessages: [] });
+  });
+});
+
+describe(".ainotebook library (sources and chat)", () => {
+  const hashA = "a".repeat(64);
+  const hashB = "b".repeat(64);
+  const sourceA: ArchivedSource = {
+    source: { id: "source-a", name: "mechanics.pdf", kind: "pdf", size: 900, contentHash: hashA, pageCount: 3, chunkCount: 2, characterCount: 32, enabled: true, addedAt: 5 },
+    chunks: [
+      { id: "source-a:0", sourceId: "source-a", ordinal: 0, page: 1, text: "Newton's second law." },
+      { id: "source-a:1", sourceId: "source-a", ordinal: 1, page: 3, text: "F equals ma." },
+    ],
+  };
+  const sourceB: ArchivedSource = {
+    source: { id: "source-b", name: "notes.md", kind: "text", size: 20, contentHash: hashB, chunkCount: 1, characterCount: 11, enabled: false, addedAt: 6 },
+    chunks: [{ id: "source-b:0", sourceId: "source-b", ordinal: 0, text: "Plain notes" }],
+  };
+  const chatMessages: ChatMessageRecord[] = [
+    { id: "message-1", role: "user", content: "What is force?", createdAt: 10 },
+    {
+      id: "message-2",
+      role: "assistant",
+      content: "Force is mass times acceleration [1][2].",
+      createdAt: 11,
+      provider: "deepseek",
+      model: "deepseek-flash",
+      citations: [
+        { id: "S1", origin: "mechanics.pdf", locator: "p. 3", text: "F equals ma.", sourceId: "source-a" },
+        { id: "N1", origin: "Notebook page", locator: "Diagram", text: "Force", pageId: "phase-zero-physics", objectId: "node-force" },
+        { id: "N2", origin: "Notebook page", locator: "Note", text: "Gone", pageId: "page-not-archived", objectId: "whatever" },
+      ],
+    },
+  ];
+
+  async function archiveWithLibrary() {
+    const page = pageFromFixture(phaseZeroFixture, 100);
+    const archive = await createNotebookArchive([page], [], "2026-09-29T00:00:00.000Z", { sources: [sourceA, sourceB], chatMessages });
+    return { page, archive };
+  }
+
+  it("round-trips sources, passages and chat with fresh ids and remapped citations", async () => {
+    const { page, archive } = await archiveWithLibrary();
+    expect(Object.keys(unzipSync(archive)).sort()).toEqual(["chat.json", "manifest.json", "pages/0000.json", "sources/0000.json", "sources/0001.json"]);
+
+    let nextId = 0;
+    const imported = await readNotebookArchive(archive, { now: 1_000, idFactory: () => `copy-${++nextId}` });
+    const [importedA, importedB] = imported.sources;
+    expect(importedA.source).toMatchObject({ name: "mechanics.pdf", contentHash: hashA, pageCount: 3, chunkCount: 2, enabled: true });
+    expect(importedA.source.id).not.toBe("source-a");
+    expect(importedA.chunks.map((chunk) => [chunk.id, chunk.sourceId, chunk.page, chunk.text])).toEqual([
+      [`${importedA.source.id}:0`, importedA.source.id, 1, "Newton's second law."],
+      [`${importedA.source.id}:1`, importedA.source.id, 3, "F equals ma."],
+    ]);
+    expect(importedB.source.enabled).toBe(false);
+    expect(importedB.chunks[0]).not.toHaveProperty("page");
+
+    expect(imported.chatMessages.map((message) => message.content)).toEqual(["What is force?", "Force is mass times acceleration [1][2]."]);
+    expect(imported.chatMessages.map((message) => message.id)).not.toContain("message-1");
+    const [sourceCitation, pageCitation, danglingCitation] = imported.chatMessages[1].citations!;
+    expect(sourceCitation.sourceId).toBe(importedA.source.id);
+    const importedPage = imported.pages[0];
+    expect(pageCitation.pageId).toBe(importedPage.id);
+    expect(pageCitation.pageId).not.toBe(page.id);
+    // Objects keep their order on import, so the copy of node-force sits at the same index.
+    const forceIndex = page.objects.findIndex((object) => object.id === "node-force");
+    expect(pageCitation.objectId).toBe(importedPage.objects[forceIndex].id);
+    // A page that was not exported keeps its quoted text but loses the link.
+    expect(danglingCitation).toEqual({ id: "N2", origin: "Notebook page", locator: "Note", text: "Gone" });
+  });
+
+  it("does not store a second copy of a source already on this device", async () => {
+    const { archive } = await archiveWithLibrary();
+    const imported = await readNotebookArchive(archive, { existingSourceIdsByHash: new Map([[hashA, "source-local"]]) });
+    expect(imported.sources.map((entry) => entry.source.name)).toEqual(["notes.md"]);
+    expect(imported.chatMessages[1].citations![0].sourceId).toBe("source-local");
+  });
+
+  it("rejects a source whose bytes no longer match the manifest", async () => {
+    const { archive } = await archiveWithLibrary();
+    const files = unzipSync(archive);
+    files["sources/0000.json"] = strToU8(JSON.stringify({ source: sourceA.source, chunks: [{ ordinal: 0, text: "Injected" }] }));
+    await expect(readNotebookArchive(zipSync(files))).rejects.toThrow(/sources\/0000.json failed integrity validation/);
+  });
+
+  it("rejects a source whose passages do not match what it declares", async () => {
+    await expect(createNotebookArchive([pageFromFixture(phaseZeroFixture, 100)], [], undefined, {
+      sources: [{ ...sourceA, chunks: sourceA.chunks.slice(0, 1) }],
+      chatMessages: [],
+    })).rejects.toThrow(/does not contain the passages it declares/);
+    await expect(createNotebookArchive([pageFromFixture(phaseZeroFixture, 100)], [], undefined, {
+      sources: [{ ...sourceA, chunks: [sourceA.chunks[0], { ...sourceA.chunks[1], page: 9 }] }],
+      chatMessages: [],
+    })).rejects.toThrow(/page it does not have/);
+  });
+
+  it("rejects chat messages with unknown fields or duplicate ids", async () => {
+    const page = pageFromFixture(phaseZeroFixture, 100);
+    await expect(createNotebookArchive([page], [], undefined, {
+      sources: [],
+      chatMessages: [{ ...chatMessages[0], reasoning: "hidden" } as ChatMessageRecord],
+    })).rejects.toThrow(/unsupported field reasoning/);
+    await expect(createNotebookArchive([page], [], undefined, { sources: [], chatMessages: [chatMessages[0], chatMessages[0]] })).rejects.toThrow(/duplicate id/);
+  });
+
+  it("refuses unlisted entries, so a library file cannot be smuggled into an archive", async () => {
+    const { archive } = await archiveWithLibrary();
+    const files = unzipSync(archive);
+    files["sources/0002.json"] = strToU8("{}");
+    await expect(readNotebookArchive(zipSync(files))).rejects.toThrow(/unexpected archive entry/);
   });
 });

@@ -11,6 +11,7 @@ import {
   restorePreviousPage,
   savePage,
   storeImportedNotebook,
+  loadLibrary,
 } from "./notebookDatabase";
 import { PageWriteConflictError } from "./pageRecords";
 
@@ -194,6 +195,38 @@ describe("importing an archive", () => {
     const loaded = await loadPages();
     expect(loaded.map((page) => page.title)).toEqual(["One", "Two"]);
     expect(loaded[1].objects.map((object) => object.id)).toEqual(["b", "c"]);
+  });
+
+  const librarySource = (id: string, hash: string) => ({
+    source: { id, name: `${id}.txt`, kind: "text" as const, size: 4, contentHash: hash, chunkCount: 2, characterCount: 8, enabled: true, addedAt: 1 },
+    chunks: [
+      { id: `${id}:1`, sourceId: id, ordinal: 1, text: "last" },
+      { id: `${id}:0`, sourceId: id, ordinal: 0, text: "firs" },
+    ],
+  });
+
+  it("stores imported sources and chat with the pages, and reads them back as one library", async () => {
+    await storeImportedNotebook([newPage("Library", [])], [], {
+      sources: [librarySource("imported-source", "1".repeat(64))],
+      chatMessages: [{ id: "imported-message", role: "user", content: "hello", createdAt: 3 }],
+    });
+    const library = await loadLibrary();
+    const imported = library.sources.find((entry) => entry.source.id === "imported-source");
+    expect(imported?.chunks.map((chunk) => chunk.ordinal)).toEqual([0, 1]);
+    expect(library.chatMessages.map((message) => message.id)).toContain("imported-message");
+  });
+
+  it("stores nothing when any part of the import fails", async () => {
+    const page = newPage("Should not appear", []);
+    // A message id that already exists makes the last write of the transaction fail.
+    await storeImportedNotebook([newPage("First", [])], [], { sources: [], chatMessages: [{ id: "taken", role: "user", content: "x", createdAt: 1 }] });
+    await expect(storeImportedNotebook([page], [], {
+      sources: [librarySource("half-imported", "2".repeat(64))],
+      chatMessages: [{ id: "taken", role: "user", content: "again", createdAt: 2 }],
+    })).rejects.toThrow();
+
+    expect((await loadPages()).map((entry) => entry.id)).not.toContain(page.id);
+    expect((await loadLibrary()).sources.map((entry) => entry.source.id)).not.toContain("half-imported");
   });
 });
 

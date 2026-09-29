@@ -2,14 +2,17 @@ import { strFromU8, strToU8, unzipSync, zipSync, type Unzipped } from "fflate";
 import type { AiTransactionRecord, NotebookObject } from "../domain/notebook";
 import { validateFixture } from "../domain/notebook";
 import type { NotebookPage } from "../domain/pages";
-import type { AssetRecord } from "./notebookDatabase";
+import { archivedSourceDocument, MAX_ARCHIVED_SOURCES, remapLibrary, validateArchivedSource, validateChatMessages, type ArchivedSource, type NotebookLibrary } from "./archiveLibrary";
+import type { AssetRecord, ChatMessageRecord } from "./notebookDatabase";
 import { CURRENT_PAGE_SCHEMA_VERSION, migratePersistedPage } from "./pageRecords";
 
-export const NOTEBOOK_ARCHIVE_VERSION = 1;
+/** Version 2 adds the library (uploaded sources and chat history). Version 1 archives still import. */
+export const NOTEBOOK_ARCHIVE_VERSION = 2;
+const SUPPORTED_ARCHIVE_VERSIONS = new Set([1, 2]);
 export const NOTEBOOK_ARCHIVE_MIME = "application/vnd.ai-notebook+zip";
 export const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 export const MAX_UNCOMPRESSED_ARCHIVE_BYTES = 128 * 1024 * 1024;
-const MAX_ARCHIVE_ENTRIES = 1_100;
+const MAX_ARCHIVE_ENTRIES = 1_400;
 const MAX_PAGE_BYTES = 5 * 1024 * 1024;
 const MAX_ASSET_BYTES = 12 * 1024 * 1024;
 const MAX_PAGES = 500;
@@ -17,18 +20,29 @@ const MAX_OBJECTS_PER_PAGE = 25_000;
 
 type ManifestPage = { id: string; title: string; path: string; sha256: string };
 type ManifestAsset = { hash: string; path: string; mimeType: string; size: number };
+type ManifestFile = { path: string; sha256: string };
 type NotebookArchiveManifest = {
   format: "ai-notebook";
-  archiveVersion: 1;
+  archiveVersion: 1 | 2;
   documentSchemaVersion: 1 | 2 | 3 | 4;
   exportedAt: string;
   pages: ManifestPage[];
   assets: ManifestAsset[];
+  sources?: ManifestFile[];
+  chat?: ManifestFile;
 };
 
-export type ImportedNotebook = {
+export type ImportedNotebook = NotebookLibrary & {
   pages: NotebookPage[];
   assets: AssetRecord[];
+};
+
+export type ImportOptions = {
+  now?: number;
+  idFactory?: () => string;
+  reservedPageIds?: ReadonlySet<string>;
+  /** Sources already on this device, by file hash, so an archived copy is not stored twice. */
+  existingSourceIdsByHash?: ReadonlyMap<string, string>;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
@@ -216,9 +230,16 @@ function validatePage(value: unknown, expectedSchemaVersion?: number): NotebookP
   return page;
 }
 
+function parseManifestFile(value: unknown, expectedPath: string, label: string): ManifestFile {
+  if (!isRecord(value) || value.path !== expectedPath || !isHash(value.sha256)) fail(`${label} manifest entry is invalid`);
+  assertOnlyKeys(value, ["path", "sha256"], `${label} manifest entry`);
+  return { path: value.path, sha256: value.sha256 };
+}
+
 function parseManifest(value: unknown): NotebookArchiveManifest {
-  if (!isRecord(value) || value.format !== "ai-notebook" || value.archiveVersion !== NOTEBOOK_ARCHIVE_VERSION) fail("the manifest version is unsupported");
-  assertOnlyKeys(value, ["format", "archiveVersion", "documentSchemaVersion", "exportedAt", "pages", "assets"], "manifest");
+  if (!isRecord(value) || value.format !== "ai-notebook" || !SUPPORTED_ARCHIVE_VERSIONS.has(value.archiveVersion as number)) fail("the manifest version is unsupported");
+  const archiveVersion = value.archiveVersion as 1 | 2;
+  assertOnlyKeys(value, ["format", "archiveVersion", "documentSchemaVersion", "exportedAt", "pages", "assets", ...(archiveVersion >= 2 ? ["sources", "chat"] : [])], "manifest");
   if (!Number.isInteger(value.documentSchemaVersion) || (value.documentSchemaVersion as number) < 1 || (value.documentSchemaVersion as number) > CURRENT_PAGE_SCHEMA_VERSION) fail("the document schema version is unsupported");
   if (typeof value.exportedAt !== "string" || Number.isNaN(Date.parse(value.exportedAt))) fail("the export timestamp is invalid");
   if (!Array.isArray(value.pages) || value.pages.length === 0 || value.pages.length > MAX_PAGES) fail("the page list is invalid");
@@ -241,15 +262,25 @@ function parseManifest(value: unknown): NotebookArchiveManifest {
   });
   if (new Set(assets.map((asset) => asset.hash)).size !== assets.length) fail("the manifest contains duplicate assets");
 
+  if (value.sources !== undefined && (!Array.isArray(value.sources) || value.sources.length > MAX_ARCHIVED_SOURCES)) fail("the source list is invalid");
+  const sources = (value.sources as unknown[] | undefined)?.map((entry, index) => parseManifestFile(entry, sourcePath(index), "a source"));
+  const chat = value.chat === undefined ? undefined : parseManifestFile(value.chat, CHAT_PATH, "the chat");
+
   return {
     format: "ai-notebook",
-    archiveVersion: NOTEBOOK_ARCHIVE_VERSION,
+    archiveVersion,
     documentSchemaVersion: value.documentSchemaVersion as 1 | 2 | 3 | 4,
     exportedAt: value.exportedAt,
     pages,
     assets,
+    ...(sources ? { sources } : {}),
+    ...(chat ? { chat } : {}),
   };
 }
+
+const sourcePath = (index: number) => `sources/${String(index).padStart(4, "0")}.json`;
+const CHAT_PATH = "chat.json";
+const EMPTY_LIBRARY: NotebookLibrary = { sources: [], chatMessages: [] };
 
 function referencedAssetHashes(pages: NotebookPage[]): Set<string> {
   return new Set(pages.flatMap((page) => page.objects.filter((object) => object.kind === "image").map((object) => object.assetHash)));
@@ -266,7 +297,12 @@ function allocateId(prefix: string, used: Set<string>, idFactory: () => string):
   return fail("unique ids could not be allocated for the imported copy");
 }
 
-export async function createNotebookArchive(pages: NotebookPage[], assets: AssetRecord[], exportedAt = new Date().toISOString()): Promise<Uint8Array> {
+export async function createNotebookArchive(
+  pages: NotebookPage[],
+  assets: AssetRecord[],
+  exportedAt = new Date().toISOString(),
+  library: NotebookLibrary = EMPTY_LIBRARY,
+): Promise<Uint8Array> {
   if (pages.length === 0 || pages.length > MAX_PAGES) fail("there must be between 1 and 500 pages");
   const validatedPages = pages.map((page) => validatePage(page));
   if (new Set(validatedPages.map((page) => page.id)).size !== validatedPages.length) fail("page ids must be unique");
@@ -299,6 +335,23 @@ export async function createNotebookArchive(pages: NotebookPage[], assets: Asset
     manifestAssets.push({ hash, path, mimeType: asset.mimeType, size: bytes.length });
   }
 
+  // The library is validated in its archive form, exactly as an import will
+  // read it, so an export never produces a file this app would then refuse.
+  if (library.sources.length > MAX_ARCHIVED_SOURCES) fail(`there can be at most ${MAX_ARCHIVED_SOURCES} sources`);
+  const manifestSources: ManifestFile[] = [];
+  for (const [index, entry] of library.sources.entries()) {
+    const document = archivedSourceDocument(entry);
+    validateArchivedSource(document);
+    const bytes = strToU8(JSON.stringify(document));
+    if (bytes.length > MAX_ASSET_BYTES) fail(`source ${entry.source.name} exceeds the archive size limit`);
+    const path = sourcePath(index);
+    files[path] = bytes;
+    manifestSources.push({ path, sha256: await sha256(bytes) });
+  }
+  const chatBytes = strToU8(JSON.stringify(validateChatMessages(structuredClone(library.chatMessages))));
+  if (chatBytes.length > MAX_ASSET_BYTES) fail("the chat history exceeds the archive size limit");
+  files[CHAT_PATH] = chatBytes;
+
   const manifest: NotebookArchiveManifest = {
     format: "ai-notebook",
     archiveVersion: NOTEBOOK_ARCHIVE_VERSION,
@@ -306,6 +359,8 @@ export async function createNotebookArchive(pages: NotebookPage[], assets: Asset
     exportedAt,
     pages: manifestPages,
     assets: manifestAssets,
+    sources: manifestSources,
+    chat: { path: CHAT_PATH, sha256: await sha256(chatBytes) },
   };
   files["manifest.json"] = strToU8(JSON.stringify(manifest, null, 2));
   return zipSync(files, { level: 6 });
@@ -333,18 +388,25 @@ function safelyUnzip(bytes: Uint8Array): Unzipped {
   }
 }
 
-export async function readNotebookArchive(
-  bytes: Uint8Array,
-  now = Date.now(),
-  idFactory: () => string = () => crypto.randomUUID(),
-  reservedPageIds: ReadonlySet<string> = new Set(),
-): Promise<ImportedNotebook> {
+export async function readNotebookArchive(bytes: Uint8Array, options: ImportOptions = {}): Promise<ImportedNotebook> {
+  const {
+    now = Date.now(),
+    idFactory = () => crypto.randomUUID(),
+    reservedPageIds = new Set<string>(),
+    existingSourceIdsByHash = new Map<string, string>(),
+  } = options;
   const files = safelyUnzip(bytes);
   const manifestBytes = files["manifest.json"];
   if (!manifestBytes || manifestBytes.length > 512 * 1024) fail("manifest.json is missing or too large");
   const manifest = parseManifest(parseJson(manifestBytes, "manifest.json"));
 
-  const expectedPaths = new Set(["manifest.json", ...manifest.pages.map((page) => page.path), ...manifest.assets.map((asset) => asset.path)]);
+  const expectedPaths = new Set([
+    "manifest.json",
+    ...manifest.pages.map((page) => page.path),
+    ...manifest.assets.map((asset) => asset.path),
+    ...(manifest.sources ?? []).map((source) => source.path),
+    ...(manifest.chat ? [manifest.chat.path] : []),
+  ]);
   for (const path of Object.keys(files)) if (!expectedPaths.has(path)) fail(`unexpected archive entry: ${path}`);
   if (Object.keys(files).length !== expectedPaths.size) fail("one or more manifest entries are missing");
 
@@ -370,6 +432,16 @@ export async function readNotebookArchive(
     });
   }
 
+  const readVerifiedJson = async (entry: ManifestFile, label: string) => {
+    const entryBytes = files[entry.path];
+    if (!entryBytes || await sha256(entryBytes) !== entry.sha256) fail(`${label} failed integrity validation`);
+    return parseJson(entryBytes, entry.path);
+  };
+  const archivedSources: ArchivedSource[] = [];
+  for (const entry of manifest.sources ?? []) archivedSources.push(validateArchivedSource(await readVerifiedJson(entry, entry.path)));
+  if (new Set(archivedSources.map((entry) => entry.source.id)).size !== archivedSources.length) fail("the archive contains duplicate source ids");
+  const archivedChat: ChatMessageRecord[] = manifest.chat ? validateChatMessages(await readVerifiedJson(manifest.chat, "the chat history")) : [];
+
   const usedAssets = referencedAssetHashes(sourcePages);
   const archivedAssets = new Set(sourceAssets.map((asset) => asset.hash));
   for (const hash of usedAssets) if (!archivedAssets.has(hash)) fail(`referenced asset ${hash} is missing`);
@@ -379,12 +451,15 @@ export async function readNotebookArchive(
   if (mismatchedImage) fail(`image ${mismatchedImage.id} does not match its asset type`);
 
   const usedPageIds = new Set(reservedPageIds);
+  const pageIdMap = new Map<string, string>();
+  const objectIdsByPage = new Map<string, Map<string, string>>();
   const pages = sourcePages.map((page, pageIndex): NotebookPage => {
     const usedObjectIds = new Set<string>();
     const usedGroupIds = new Set<string>();
     const usedOptionIds = new Set<string>();
     const usedTransactionIds = new Set<string>();
     const objectIds = new Map(page.objects.map((object) => [object.id, allocateId("object", usedObjectIds, idFactory)]));
+    objectIdsByPage.set(page.id, objectIds);
     const groupIds = new Map([...new Set(page.objects.flatMap((object) => object.groupId ? [object.groupId] : []))].map((groupId) => [groupId, allocateId("group", usedGroupIds, idFactory)]));
     const objects = page.objects.map((object): NotebookObject => {
       const remappedBase = { id: objectIds.get(object.id)!, groupId: object.groupId ? groupIds.get(object.groupId) : undefined };
@@ -415,9 +490,11 @@ export async function readNotebookArchive(
       generatedObjectIds: transaction.generatedObjectIds.map(remapObjectReference),
       updatedObjectIds: transaction.updatedObjectIds.map(remapObjectReference),
     }));
+    const pageId = allocateId("page", usedPageIds, idFactory);
+    pageIdMap.set(page.id, pageId);
     return {
       ...page,
-      id: allocateId("page", usedPageIds, idFactory),
+      id: pageId,
       objects,
       aiTransactions,
       createdAt: now + pageIndex,
@@ -425,5 +502,13 @@ export async function readNotebookArchive(
     };
   });
 
-  return { pages, assets: sourceAssets };
+  const usedLibraryIds = new Set<string>();
+  const library = remapLibrary({ sources: archivedSources, chatMessages: archivedChat }, {
+    allocate: (prefix) => allocateId(prefix, usedLibraryIds, idFactory),
+    existingSourceIdsByHash,
+    pageIds: pageIdMap,
+    objectIdsByPage,
+  });
+
+  return { pages, assets: sourceAssets, ...library };
 }

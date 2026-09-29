@@ -59,7 +59,7 @@ describe("fixture lesson diagram lifecycle", () => {
 
     const archive = await createNotebookArchive([moved], [], "2026-09-17T00:00:00.000Z");
     let copyId = 0;
-    const imported = await readNotebookArchive(archive, 1_000, () => `copy-${++copyId}`);
+    const imported = await readNotebookArchive(archive, { now: 1_000, idFactory: () => `copy-${++copyId}` });
     const [importedDiagram] = collectDiagrams(imported.pages[0].objects);
     expect(diagramAdapter.validate(importedDiagram)).toEqual([]);
     expect(diagramAdapter.toPlainText(importedDiagram)).toBe(movedReadingText);
