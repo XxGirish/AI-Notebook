@@ -1,6 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { KonvaPrototype, type CanvasInsertOutcome, type CanvasInsertRequest } from "./canvas/KonvaPrototype";
-import { ChatDock } from "./components/chat/ChatDock";
+
+// The study assistant brings keyword search, chat rendering and file reading
+// that the canvas never needs to start, so it loads separately. The service
+// worker precaches every built chunk, so this still works offline.
+const ChatDock = lazy(() => import("./components/chat/ChatDock").then((module) => ({ default: module.ChatDock })));
 import { useMediaQuery } from "./components/useMediaQuery";
 import { PageSidebar } from "./components/PageSidebar";
 import type { AiTransactionRecord, NotebookObject } from "./domain/notebook";
@@ -557,6 +561,7 @@ export function App() {
         )}
       </div>
 
+      <Suspense fallback={null}>
       <ChatDock
         pages={pages}
         activePageId={activePageId}
@@ -566,6 +571,7 @@ export function App() {
         onOpenPage={setActivePageId}
         libraryGeneration={libraryGeneration}
       />
+      </Suspense>
     </main>
   );
 }
