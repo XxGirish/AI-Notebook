@@ -3,7 +3,8 @@ import type { AiTransactionRecord, NotebookObject } from "../domain/notebook";
 import { validateFixture } from "../domain/notebook";
 import type { NotebookPage } from "../domain/pages";
 import type { QuizAttemptRecord } from "../domain/quizAttempts";
-import { archivedSourceDocument, MAX_ARCHIVED_SOURCES, remapLibrary, validateArchivedSource, validateChatMessages, validateQuizAttempts, type ArchivedSource, type NotebookLibrary } from "./archiveLibrary";
+import type { AiFeedbackRecord } from "../domain/aiFeedback";
+import { archivedSourceDocument, MAX_ARCHIVED_SOURCES, remapLibrary, validateAiFeedback, validateArchivedSource, validateChatMessages, validateQuizAttempts, type ArchivedSource, type NotebookLibrary } from "./archiveLibrary";
 import type { AssetRecord, ChatMessageRecord } from "./notebookDatabase";
 import { CURRENT_PAGE_SCHEMA_VERSION, migratePersistedPage } from "./pageRecords";
 
@@ -32,10 +33,12 @@ type NotebookArchiveManifest = {
   sources?: ManifestFile[];
   chat?: ManifestFile;
   attempts?: ManifestFile;
+  feedback?: ManifestFile;
 };
 
 export type ImportedNotebook = NotebookLibrary & {
   quizAttempts: QuizAttemptRecord[];
+  aiFeedback: AiFeedbackRecord[];
   pages: NotebookPage[];
   assets: AssetRecord[];
 };
@@ -247,7 +250,7 @@ function parseManifestFile(value: unknown, expectedPath: string, label: string):
 function parseManifest(value: unknown): NotebookArchiveManifest {
   if (!isRecord(value) || value.format !== "ai-notebook" || !SUPPORTED_ARCHIVE_VERSIONS.has(value.archiveVersion as number)) fail("the manifest version is unsupported");
   const archiveVersion = value.archiveVersion as 1 | 2;
-  assertOnlyKeys(value, ["format", "archiveVersion", "documentSchemaVersion", "exportedAt", "pages", "assets", ...(archiveVersion >= 2 ? ["sources", "chat", "attempts"] : [])], "manifest");
+  assertOnlyKeys(value, ["format", "archiveVersion", "documentSchemaVersion", "exportedAt", "pages", "assets", ...(archiveVersion >= 2 ? ["sources", "chat", "attempts", "feedback"] : [])], "manifest");
   if (!Number.isInteger(value.documentSchemaVersion) || (value.documentSchemaVersion as number) < 1 || (value.documentSchemaVersion as number) > CURRENT_PAGE_SCHEMA_VERSION) fail("the document schema version is unsupported");
   if (typeof value.exportedAt !== "string" || Number.isNaN(Date.parse(value.exportedAt))) fail("the export timestamp is invalid");
   if (!Array.isArray(value.pages) || value.pages.length === 0 || value.pages.length > MAX_PAGES) fail("the page list is invalid");
@@ -274,6 +277,7 @@ function parseManifest(value: unknown): NotebookArchiveManifest {
   const sources = (value.sources as unknown[] | undefined)?.map((entry, index) => parseManifestFile(entry, sourcePath(index), "a source"));
   const chat = value.chat === undefined ? undefined : parseManifestFile(value.chat, CHAT_PATH, "the chat");
   const attempts = value.attempts === undefined ? undefined : parseManifestFile(value.attempts, ATTEMPTS_PATH, "the quiz attempts");
+  const feedback = value.feedback === undefined ? undefined : parseManifestFile(value.feedback, FEEDBACK_PATH, "the AI feedback");
 
   return {
     format: "ai-notebook",
@@ -285,12 +289,14 @@ function parseManifest(value: unknown): NotebookArchiveManifest {
     ...(sources ? { sources } : {}),
     ...(chat ? { chat } : {}),
     ...(attempts ? { attempts } : {}),
+    ...(feedback ? { feedback } : {}),
   };
 }
 
 const sourcePath = (index: number) => `sources/${String(index).padStart(4, "0")}.json`;
 const CHAT_PATH = "chat.json";
 const ATTEMPTS_PATH = "attempts.json";
+const FEEDBACK_PATH = "feedback.json";
 const EMPTY_LIBRARY: NotebookLibrary = { sources: [], chatMessages: [] };
 
 function referencedAssetHashes(pages: NotebookPage[]): Set<string> {
@@ -369,6 +375,9 @@ export async function createNotebookArchive(
   const attemptBytes = strToU8(JSON.stringify(attempts));
   if (attemptBytes.length > MAX_ASSET_BYTES) fail("the quiz attempts exceed the archive size limit");
   files[ATTEMPTS_PATH] = attemptBytes;
+  const feedbackBytes = strToU8(JSON.stringify(validateAiFeedback(structuredClone((library.aiFeedback ?? []).filter((report) => exportedPageIds.has(report.pageId))), exportedPageIds)));
+  if (feedbackBytes.length > MAX_ASSET_BYTES) fail("the AI feedback exceeds the archive size limit");
+  files[FEEDBACK_PATH] = feedbackBytes;
 
   const manifest: NotebookArchiveManifest = {
     format: "ai-notebook",
@@ -380,6 +389,7 @@ export async function createNotebookArchive(
     sources: manifestSources,
     chat: { path: CHAT_PATH, sha256: await sha256(chatBytes) },
     attempts: { path: ATTEMPTS_PATH, sha256: await sha256(attemptBytes) },
+    feedback: { path: FEEDBACK_PATH, sha256: await sha256(feedbackBytes) },
   };
   files["manifest.json"] = strToU8(JSON.stringify(manifest, null, 2));
   return zipSync(files, { level: 6 });
@@ -426,6 +436,7 @@ export async function readNotebookArchive(bytes: Uint8Array, options: ImportOpti
     ...(manifest.sources ?? []).map((source) => source.path),
     ...(manifest.chat ? [manifest.chat.path] : []),
     ...(manifest.attempts ? [manifest.attempts.path] : []),
+    ...(manifest.feedback ? [manifest.feedback.path] : []),
   ]);
   for (const path of Object.keys(files)) if (!expectedPaths.has(path)) fail(`unexpected archive entry: ${path}`);
   if (Object.keys(files).length !== expectedPaths.size) fail("one or more manifest entries are missing");
@@ -464,6 +475,9 @@ export async function readNotebookArchive(bytes: Uint8Array, options: ImportOpti
   const archivedAttempts = manifest.attempts
     ? validateQuizAttempts(await readVerifiedJson(manifest.attempts, "the quiz attempts"), new Set(sourcePages.map((page) => page.id)))
     : [];
+  const archivedFeedback = manifest.feedback
+    ? validateAiFeedback(await readVerifiedJson(manifest.feedback, "the AI feedback"), new Set(sourcePages.map((page) => page.id)))
+    : [];
 
   const usedAssets = referencedAssetHashes(sourcePages);
   const archivedAssets = new Set(sourceAssets.map((asset) => asset.hash));
@@ -477,6 +491,7 @@ export async function readNotebookArchive(bytes: Uint8Array, options: ImportOpti
   const pageIdMap = new Map<string, string>();
   const objectIdsByPage = new Map<string, Map<string, string>>();
   const remapAttemptByPage = new Map<string, (attempt: QuizAttemptRecord) => QuizAttemptRecord>();
+  const remapFeedbackByPage = new Map<string, (report: AiFeedbackRecord) => AiFeedbackRecord>();
   const pages = sourcePages.map((page, pageIndex): NotebookPage => {
     const usedObjectIds = new Set<string>();
     const usedGroupIds = new Set<string>();
@@ -509,9 +524,15 @@ export async function readNotebookArchive(bytes: Uint8Array, options: ImportOpti
       historicalObjectIds.set(id, allocated);
       return allocated;
     })();
+    const transactionIds = new Map<string, string>();
+    const remapTransactionId = (id: string) => transactionIds.get(id) ?? (() => {
+      const allocated = allocateId("transaction", usedTransactionIds, idFactory);
+      transactionIds.set(id, allocated);
+      return allocated;
+    })();
     const aiTransactions = page.aiTransactions.map((transaction): AiTransactionRecord => ({
       ...structuredClone(transaction),
-      transactionId: allocateId("transaction", usedTransactionIds, idFactory),
+      transactionId: remapTransactionId(transaction.transactionId),
       sources: transaction.sources.map((source) => ({ ...source, id: remapObjectReference(source.id) })),
       generatedObjectIds: transaction.generatedObjectIds.map(remapObjectReference),
       updatedObjectIds: transaction.updatedObjectIds.map(remapObjectReference),
@@ -531,6 +552,12 @@ export async function readNotebookArchive(bytes: Uint8Array, options: ImportOpti
       })();
       return { ...attempt, pageId, quizId: remapObjectReference(attempt.quizId), chosenOptionId };
     });
+    remapFeedbackByPage.set(page.id, (report) => ({
+      ...report,
+      pageId,
+      objectId: remapObjectReference(report.objectId),
+      transactionId: remapTransactionId(report.transactionId),
+    }));
     return {
       ...page,
       id: pageId,
@@ -553,5 +580,10 @@ export async function readNotebookArchive(bytes: Uint8Array, options: ImportOpti
     id: allocateId("attempt", usedLibraryIds, idFactory),
   }));
 
-  return { pages, assets: sourceAssets, ...library, quizAttempts };
+  const aiFeedback = archivedFeedback.map((report) => ({
+    ...remapFeedbackByPage.get(report.pageId)!(report),
+    id: allocateId("feedback", usedLibraryIds, idFactory),
+  }));
+
+  return { pages, assets: sourceAssets, ...library, quizAttempts, aiFeedback };
 }

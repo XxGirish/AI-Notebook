@@ -27,6 +27,10 @@ import { AI_CANVAS_ACTIONS, AI_REQUEST_PLANS } from "../ai/requestContext";
 import { LearningCard } from "../components/LearningCard";
 import { useQuizAttempts } from "../components/useQuizAttempts";
 import { useStaleGeneratedObjects } from "../components/useStaleGeneratedObjects";
+import { useAiFeedback } from "../components/useAiFeedback";
+import { AiProvenanceDialog } from "../components/AiProvenanceDialog";
+import { createAiFeedback, generatingTransactions } from "../domain/aiFeedback";
+import { learningObjectAdapter } from "../domain/learningObjectAdapters";
 import { describeQuizAttempts, summarizeQuizAttempts, type QuizAssistance } from "../domain/quizAttempts";
 import { describeRecency, QUIZ_REVIEW_LABELS, reviewQuizzes, summarizeReview } from "../domain/quizReview";
 import { DiagramLabelEditor } from "../components/DiagramLabelEditor";
@@ -182,6 +186,8 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
   const [history, setHistory] = useState(() => createHistory(fixture.objects));
   const quizAttempts = useQuizAttempts(fixture.id);
   const [aiTransactions, setAiTransactions] = useState(fixture.aiTransactions);
+  const aiFeedback = useAiFeedback(fixture.id);
+  const [provenanceObjectId, setProvenanceObjectId] = useState<string>();
   const [pendingFocusId, setPendingFocusId] = useState<string>();
   const [camera, setCamera] = useState<Camera>({ x: 24, y: 24, scale: 0.86 });
   const [penSize, setPenSize] = useState(4.5);
@@ -258,6 +264,16 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
   const connectableById = useMemo(() => new Map(connectables.map((object) => [object.id, object])), [connectables]);
   const linearReadingItems = useMemo(() => buildLinearReadingItems(objects), [objects]);
   const staleObjects = useStaleGeneratedObjects(objects, aiTransactions);
+  const generatedBy = useMemo(() => generatingTransactions(aiTransactions), [aiTransactions]);
+  const presentSelectedSources = (transaction: AiTransactionRecord) => {
+    const present = new Set(objects.map((object) => object.id));
+    return transaction.sources.filter((source) => source.selected && present.has(source.id)).map((source) => source.id);
+  };
+  const selectSources = (ids: string[]) => {
+    setTool("select");
+    setFocusedObjectId(undefined);
+    setSelectedIds(expandGroupedIds(objects, new Set(ids)));
+  };
   const quizReview = useMemo(() => {
     // Quizzes in reading order, so ties in the review keep the page's own order.
     const readingIndex = new Map(linearReadingItems.map((item, index) => [item.id, index]));
@@ -1625,6 +1641,38 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
           </details>
         )}
 
+        {(() => {
+          const object = provenanceObjectId ? cards.find((card) => card.id === provenanceObjectId) : undefined;
+          const transaction = object ? generatedBy.get(object.id) : undefined;
+          if (!object || !transaction) return null;
+          const sourceIds = presentSelectedSources(transaction);
+          return (
+            <AiProvenanceDialog
+              key={object.id}
+              transaction={transaction}
+              actionLabel={draftLabel(transaction.intent)}
+              sourceCount={sourceIds.length}
+              reports={aiFeedback.reports.filter((report) => report.objectId === object.id)}
+              readOnly={readOnly}
+              onShowSources={() => {
+                setProvenanceObjectId(undefined);
+                selectSources(sourceIds);
+              }}
+              onReport={(reason, note) => aiFeedback.addReport(createAiFeedback({
+                id: `feedback-${crypto.randomUUID()}`,
+                pageId: fixture.id,
+                object,
+                transaction,
+                reason,
+                note,
+                contentSnapshot: learningObjectAdapter.toPlainText(object, { includeAnswer: true }),
+                createdAt: Date.now(),
+              }))}
+              onClose={() => setProvenanceObjectId(undefined)}
+            />
+          );
+        })()}
+
         <details className="linear-reading-view">
           <summary>Linear reading view</summary>
           {linearReadingItems.length > 0 ? (
@@ -1957,11 +2005,14 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
               {...(staleObjects.has(card.id) ? {
                 stale: {
                   reason: staleObjects.get(card.id)!.reason,
-                  onSelectSource: staleObjects.get(card.id)!.sourceIds.length > 0 ? () => {
-                    setTool("select");
-                    setFocusedObjectId(undefined);
-                    setSelectedIds(expandGroupedIds(objects, new Set(staleObjects.get(card.id)!.sourceIds)));
-                  } : undefined,
+                  onSelectSource: staleObjects.get(card.id)!.sourceIds.length > 0 ? () => selectSources(staleObjects.get(card.id)!.sourceIds) : undefined,
+                },
+              } : {})}
+              {...(generatedBy.has(card.id) ? {
+                aiOrigin: {
+                  label: draftLabel(generatedBy.get(card.id)!.intent),
+                  reported: aiFeedback.reports.some((report) => report.objectId === card.id),
+                  onOpen: () => setProvenanceObjectId(card.id),
                 },
               } : {})}
               {...(card.kind === "quiz-card" ? {

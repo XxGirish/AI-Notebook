@@ -1,6 +1,7 @@
 import Dexie, { type EntityTable, type Table, type Transaction } from "dexie";
 import type { NotebookObject } from "../domain/notebook";
 import type { NotebookPage } from "../domain/pages";
+import type { AiFeedbackRecord } from "../domain/aiFeedback";
 import type { QuizAttemptRecord } from "../domain/quizAttempts";
 import { orphanAssetHashes } from "./assetCleanup";
 import {
@@ -75,6 +76,7 @@ class NotebookDatabase extends Dexie {
   sourceChunks!: EntityTable<SourceChunkRecord, "id">;
   chatMessages!: EntityTable<ChatMessageRecord, "id">;
   quizAttempts!: EntityTable<QuizAttemptRecord, "id">;
+  aiFeedback!: EntityTable<AiFeedbackRecord, "id">;
 
   constructor(name = "ai-notebook") {
     super(name);
@@ -124,6 +126,18 @@ class NotebookDatabase extends Dexie {
       sourceChunks: "id, sourceId",
       chatMessages: "id, createdAt",
       quizAttempts: "id, pageId, answeredAt",
+    });
+    // Version 7 adds reports on AI-generated content, kept on this device.
+    this.version(7).stores({
+      pages: "id, createdAt, updatedAt",
+      pageObjects: "[pageId+objectId], pageId, kind",
+      recoverySnapshots: "pageId, capturedAt",
+      assets: "hash, createdAt",
+      sources: "id, addedAt, contentHash",
+      sourceChunks: "id, sourceId",
+      chatMessages: "id, createdAt",
+      quizAttempts: "id, pageId, answeredAt",
+      aiFeedback: "id, pageId, createdAt",
     });
   }
 }
@@ -252,7 +266,7 @@ export function savePage(page: NotebookPage, expectedUpdatedAt?: number): Promis
 export function deletePage(pageId: string, expectedUpdatedAt: number, replacement?: NotebookPage): Promise<void> {
   return enqueuePageWrite(pageId, async () => {
     try {
-      await database.transaction("rw", [database.pages, database.pageObjects, database.recoverySnapshots, database.quizAttempts], async () => {
+      await database.transaction("rw", [database.pages, database.pageObjects, database.recoverySnapshots, database.quizAttempts, database.aiFeedback], async () => {
         const current = await database.pages.get(pageId);
         assertExpectedPageVersion(current, expectedUpdatedAt, pageId);
         await database.pages.delete(pageId);
@@ -260,6 +274,7 @@ export function deletePage(pageId: string, expectedUpdatedAt: number, replacemen
         await database.recoverySnapshots.delete(pageId);
         // A deleted page cannot come back, so neither can its quizzes' answers.
         await database.quizAttempts.where("pageId").equals(pageId).delete();
+        await database.aiFeedback.where("pageId").equals(pageId).delete();
         if (replacement) {
           const split = splitPage(replacement);
           await database.pageObjects.bulkAdd(structuredClone(split.objects));
@@ -346,6 +361,7 @@ export type ImportedLibrary = {
   sources: { source: SourceRecord; chunks: SourceChunkRecord[] }[];
   chatMessages: ChatMessageRecord[];
   quizAttempts?: QuizAttemptRecord[];
+  aiFeedback?: AiFeedbackRecord[];
 };
 
 /** Stores an imported copy in one transaction: a failure leaves no page, source, message or attempt of it behind. */
@@ -355,7 +371,7 @@ export async function storeImportedNotebook(
   library: ImportedLibrary = { sources: [], chatMessages: [] },
 ): Promise<void> {
   const split = pages.map(splitPage);
-  await database.transaction("rw", [database.pages, database.pageObjects, database.assets, database.sources, database.sourceChunks, database.chatMessages, database.quizAttempts], async () => {
+  await database.transaction("rw", [database.pages, database.pageObjects, database.assets, database.sources, database.sourceChunks, database.chatMessages, database.quizAttempts, database.aiFeedback], async () => {
     await database.assets.bulkPut(assets);
     await database.pageObjects.bulkAdd(split.flatMap((page) => page.objects));
     await database.pages.bulkAdd(split.map((page) => page.metadata));
@@ -363,6 +379,7 @@ export async function storeImportedNotebook(
     await database.sourceChunks.bulkAdd(library.sources.flatMap((entry) => entry.chunks));
     await database.chatMessages.bulkAdd(library.chatMessages);
     await database.quizAttempts.bulkAdd(library.quizAttempts ?? []);
+    await database.aiFeedback.bulkAdd(library.aiFeedback ?? []);
   });
   for (const page of pages) rememberSavedObjects(page);
 }
@@ -422,12 +439,13 @@ export async function deleteSource(sourceId: string): Promise<void> {
 
 /** Every source with its passages, the chat history and quiz attempts, read in one consistent snapshot for export. */
 export async function loadLibrary(): Promise<Required<ImportedLibrary>> {
-  return database.transaction("r", [database.sources, database.sourceChunks, database.chatMessages, database.quizAttempts], async () => {
-    const [sources, chunks, chatMessages, quizAttempts] = await Promise.all([
+  return database.transaction("r", [database.sources, database.sourceChunks, database.chatMessages, database.quizAttempts, database.aiFeedback], async () => {
+    const [sources, chunks, chatMessages, quizAttempts, aiFeedback] = await Promise.all([
       database.sources.orderBy("addedAt").toArray(),
       database.sourceChunks.toArray(),
       database.chatMessages.orderBy("createdAt").toArray(),
       database.quizAttempts.orderBy("answeredAt").toArray(),
+      database.aiFeedback.orderBy("createdAt").toArray(),
     ]);
     const chunksBySource = new Map<string, SourceChunkRecord[]>();
     for (const chunk of chunks) {
@@ -439,8 +457,18 @@ export async function loadLibrary(): Promise<Required<ImportedLibrary>> {
       sources: sources.map((source) => ({ source, chunks: (chunksBySource.get(source.id) ?? []).sort((left, right) => left.ordinal - right.ordinal) })),
       chatMessages,
       quizAttempts,
+      aiFeedback,
     };
   });
+}
+
+export async function loadAiFeedback(pageId: string): Promise<AiFeedbackRecord[]> {
+  return (await database.aiFeedback.where("pageId").equals(pageId).toArray()).sort((left, right) => left.createdAt - right.createdAt);
+}
+
+/** Adds one report; reports are kept as written, never edited. */
+export async function addAiFeedback(record: AiFeedbackRecord): Promise<void> {
+  await database.aiFeedback.add(structuredClone(record));
 }
 
 export async function loadQuizAttempts(pageId: string): Promise<QuizAttemptRecord[]> {

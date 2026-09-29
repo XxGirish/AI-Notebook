@@ -226,7 +226,7 @@ describe(".ainotebook library (sources and chat)", () => {
 
   it("round-trips sources, passages and chat with fresh ids and remapped citations", async () => {
     const { page, archive } = await archiveWithLibrary();
-    expect(Object.keys(unzipSync(archive)).sort()).toEqual(["attempts.json", "chat.json", "manifest.json", "pages/0000.json", "sources/0000.json", "sources/0001.json"]);
+    expect(Object.keys(unzipSync(archive)).sort()).toEqual(["attempts.json", "chat.json", "feedback.json", "manifest.json", "pages/0000.json", "sources/0000.json", "sources/0001.json"]);
 
     let nextId = 0;
     const imported = await readNotebookArchive(archive, { now: 1_000, idFactory: () => `copy-${++nextId}` });
@@ -345,5 +345,45 @@ describe(".ainotebook quiz attempts", () => {
     manifest.attempts.sha256 = await sha256(forged);
     files["manifest.json"] = strToU8(JSON.stringify(manifest));
     await expect(readNotebookArchive(zipSync(files))).rejects.toThrow(/page that is not in the archive/);
+  });
+});
+
+describe(".ainotebook AI feedback", () => {
+  it("round-trips reports pointing at the imported copy of the object and its transaction", async () => {
+    const page = pageFromFixture(phaseZeroFixture, 100);
+    page.aiTransactions.push({
+      transactionId: "tx-original", requestId: "req", intent: "explain_selection", provider: "mock", model: "m", configurationId: "c",
+      proposalSchemaVersion: 1, sources: [{ id: "node-force", revision: 1, selected: true, contentHash: "c".repeat(64) }], committedAt: 90, generatedObjectIds: ["concept-card"], updatedObjectIds: [],
+    });
+    const report = {
+      id: "feedback-1", pageId: page.id, objectId: "concept-card", objectRevision: 1, transactionId: "tx-original", requestId: "req",
+      intent: "explain_selection" as const, provider: "mock", model: "m", configurationId: "c", reason: "misleading" as const,
+      note: "Mixes up mass and weight", contentSnapshot: "Mass is weight.", createdAt: 95,
+    };
+    const archive = await createNotebookArchive([page], [], undefined, { sources: [], chatMessages: [], aiFeedback: [report, { ...report, id: "orphan", pageId: "elsewhere" }] });
+    const imported = await readNotebookArchive(archive);
+
+    const importedPage = imported.pages[0];
+    const cardIndex = page.objects.findIndex((object) => object.id === "concept-card");
+    const importedCardId = importedPage.objects[cardIndex].id;
+    const importedTransaction = importedPage.aiTransactions.find((transaction) => transaction.generatedObjectIds.includes(importedCardId))!;
+    expect(imported.aiFeedback).toHaveLength(1);
+    expect(imported.aiFeedback[0]).toMatchObject({
+      pageId: importedPage.id,
+      objectId: importedPage.objects[cardIndex].id,
+      transactionId: importedTransaction.transactionId,
+      reason: "misleading",
+      contentSnapshot: "Mass is weight.",
+    });
+    expect(importedTransaction.sources[0]).toMatchObject({ selected: true });
+    expect(imported.aiFeedback[0].id).not.toBe("feedback-1");
+  });
+
+  it("rejects a report with an unknown reason", async () => {
+    const page = pageFromFixture(phaseZeroFixture, 100);
+    await expect(createNotebookArchive([page], [], undefined, {
+      sources: [], chatMessages: [],
+      aiFeedback: [{ id: "f", pageId: page.id, objectId: "o", objectRevision: 1, transactionId: "t", requestId: "r", intent: "explain_selection", provider: "p", model: "m", configurationId: "c", reason: "rude" as never, contentSnapshot: "", createdAt: 1 }],
+    })).rejects.toThrow(/invalid intent or reason/);
   });
 });

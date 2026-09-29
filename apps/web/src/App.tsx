@@ -371,6 +371,7 @@ export function App() {
         imported.sources.length > 0 ? `${imported.sources.length} source${imported.sources.length === 1 ? "" : "s"}` : "",
         imported.chatMessages.length > 0 ? `${imported.chatMessages.length} chat message${imported.chatMessages.length === 1 ? "" : "s"}` : "",
         imported.quizAttempts.length > 0 ? `${imported.quizAttempts.length} quiz answer${imported.quizAttempts.length === 1 ? "" : "s"}` : "",
+        imported.aiFeedback.length > 0 ? `${imported.aiFeedback.length} AI report${imported.aiFeedback.length === 1 ? "" : "s"}` : "",
       ].filter(Boolean).join(", ");
       setTransferStatus(`Imported ${imported.pages.length} page${imported.pages.length === 1 ? "" : "s"} as copies${librarySummary ? `, with ${librarySummary}` : ""}`);
     } catch (error) {

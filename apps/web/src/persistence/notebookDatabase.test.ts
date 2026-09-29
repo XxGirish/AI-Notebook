@@ -14,6 +14,8 @@ import {
   loadLibrary,
   addQuizAttempt,
   loadQuizAttempts,
+  addAiFeedback,
+  loadAiFeedback,
 } from "./notebookDatabase";
 import { PageWriteConflictError } from "./pageRecords";
 
@@ -287,5 +289,23 @@ describe("quiz attempts (database version 6)", () => {
     await deletePage(page.id, page.updatedAt);
     expect(await loadQuizAttempts(page.id)).toEqual([]);
     expect((await loadQuizAttempts(kept.id)).map((entry) => entry.id)).toEqual(["stays"]);
+  });
+});
+
+describe("AI feedback (database version 7)", () => {
+  it("keeps reports per page and removes them with the page", async () => {
+    const page = newPage("Reported");
+    await savePage(page);
+    const report = {
+      id: "report-1", pageId: page.id, objectId: "card", objectRevision: 1, transactionId: "tx", requestId: "req", intent: "explain_selection" as const,
+      provider: "mock", model: "m", configurationId: "c", reason: "incorrect" as const, contentSnapshot: "text", createdAt: 5,
+    };
+    await addAiFeedback(report);
+    await expect(addAiFeedback({ ...report, reason: "other" })).rejects.toThrow();
+    expect((await loadAiFeedback(page.id)).map((entry) => entry.reason)).toEqual(["incorrect"]);
+    expect((await loadLibrary()).aiFeedback.map((entry) => entry.id)).toContain("report-1");
+
+    await deletePage(page.id, page.updatedAt);
+    expect(await loadAiFeedback(page.id)).toEqual([]);
   });
 });

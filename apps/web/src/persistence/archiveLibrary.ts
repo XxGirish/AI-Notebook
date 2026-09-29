@@ -1,3 +1,4 @@
+import { AI_FEEDBACK_REASONS, MAX_FEEDBACK_NOTE, MAX_FEEDBACK_SNAPSHOT, type AiFeedbackRecord } from "../domain/aiFeedback";
 import type { QuizAttemptRecord } from "../domain/quizAttempts";
 import type { ChatCitation, ChatMessageRecord, SourceChunkRecord, SourceRecord } from "./notebookDatabase";
 
@@ -8,11 +9,13 @@ import type { ChatCitation, ChatMessageRecord, SourceChunkRecord, SourceRecord }
  */
 
 export type ArchivedSource = { source: SourceRecord; chunks: SourceChunkRecord[] };
-export type NotebookLibrary = { sources: ArchivedSource[]; chatMessages: ChatMessageRecord[]; quizAttempts?: QuizAttemptRecord[] };
+export type NotebookLibrary = { sources: ArchivedSource[]; chatMessages: ChatMessageRecord[]; quizAttempts?: QuizAttemptRecord[]; aiFeedback?: AiFeedbackRecord[] };
 
 export const MAX_ARCHIVED_SOURCES = 200;
 export const MAX_ARCHIVED_CHAT_MESSAGES = 5_000;
 export const MAX_ARCHIVED_QUIZ_ATTEMPTS = 50_000;
+export const MAX_ARCHIVED_AI_FEEDBACK = 5_000;
+const AI_INTENTS = new Set(["teach_section", "explain_selection", "create_diagram", "create_equation", "create_quiz", "chat_answer"]);
 const MAX_CHUNKS_PER_SOURCE = 5_000;
 const MAX_CHUNK_CHARACTERS = 4_000;
 const MAX_MESSAGE_CHARACTERS = 100_000;
@@ -168,6 +171,41 @@ export function validateQuizAttempts(value: unknown, pageIds: ReadonlySet<string
       sequence: attempt.sequence,
       answeredAt: attempt.answeredAt,
       ...(attempt.assistance !== undefined ? { assistance: attempt.assistance as QuizAttemptRecord["assistance"] } : {}),
+    };
+  });
+}
+
+export function validateAiFeedback(value: unknown, pageIds: ReadonlySet<string>): AiFeedbackRecord[] {
+  if (!Array.isArray(value) || value.length > MAX_ARCHIVED_AI_FEEDBACK) fail("the AI feedback list is invalid or too long");
+  const ids = new Set<string>();
+  return value.map((report): AiFeedbackRecord => {
+    if (!isRecord(report)) fail("the AI feedback list contains a non-object entry");
+    assertOnlyKeys(report, ["id", "pageId", "objectId", "objectRevision", "transactionId", "requestId", "intent", "provider", "model", "configurationId", "reason", "note", "contentSnapshot", "createdAt"], "AI feedback");
+    if (!isString(report.id, 200) || ids.has(report.id)) fail("an AI feedback report has a missing or duplicate id");
+    ids.add(report.id);
+    const label = `AI feedback ${report.id}`;
+    if (!isString(report.pageId, 200) || !pageIds.has(report.pageId)) fail(`${label} belongs to a page that is not in the archive`);
+    for (const field of ["objectId", "transactionId", "requestId", "provider", "model", "configurationId"] as const) {
+      if (!isString(report[field], 200)) fail(`${label} has an invalid ${field}`);
+    }
+    if (!AI_INTENTS.has(String(report.intent)) || !(String(report.reason) in AI_FEEDBACK_REASONS)) fail(`${label} has an invalid intent or reason`);
+    if (!isPositiveInteger(report.objectRevision) || !isFiniteNumber(report.createdAt)) fail(`${label} has an invalid revision or time`);
+    if (!isOptionalString(report.note, MAX_FEEDBACK_NOTE) || typeof report.contentSnapshot !== "string" || report.contentSnapshot.length > MAX_FEEDBACK_SNAPSHOT) fail(`${label} has invalid text`);
+    return {
+      id: report.id,
+      pageId: report.pageId,
+      objectId: report.objectId as string,
+      objectRevision: report.objectRevision,
+      transactionId: report.transactionId as string,
+      requestId: report.requestId as string,
+      intent: report.intent as AiFeedbackRecord["intent"],
+      provider: report.provider as string,
+      model: report.model as string,
+      configurationId: report.configurationId as string,
+      reason: report.reason as AiFeedbackRecord["reason"],
+      ...(report.note ? { note: report.note as string } : {}),
+      contentSnapshot: report.contentSnapshot,
+      createdAt: report.createdAt,
     };
   });
 }

@@ -36,9 +36,11 @@ type Props = {
   attemptError?: string;
   /** Set when the note this card was generated from has been edited or deleted since. */
   stale?: { reason: StaleReason; onSelectSource?: () => void };
+  /** Set on AI-generated cards: opens where it came from and how to report it. */
+  aiOrigin?: { label: string; reported: boolean; onOpen: () => void };
 };
 
-export function LearningCard({ object, position, size, cameraScale, selected, resizable, readOnly, onSelect, onMove, onMoveEnd, onResize, onResizeEnd, onEditText, onEditEquation, onEditQuiz, onAnswerQuiz, attemptHistory, attemptError, stale }: Props) {
+export function LearningCard({ object, position, size, cameraScale, selected, resizable, readOnly, onSelect, onMove, onMoveEnd, onResize, onResizeEnd, onEditText, onEditEquation, onEditQuiz, onAnswerQuiz, attemptHistory, attemptError, stale, aiOrigin }: Props) {
   const [answer, setAnswer] = useState<string>();
   const [editing, setEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState(object.kind === "text-card" || object.kind === "equation-card" ? object.title : "");
@@ -182,6 +184,19 @@ export function LearningCard({ object, position, size, cameraScale, selected, re
 
       {!editing && !readOnly && (
         <button type="button" className="learning-card__edit" onClick={() => setEditing(true)}>Edit</button>
+      )}
+
+      {aiOrigin && (
+        <button
+          type="button"
+          className="learning-card__ai"
+          data-reported={aiOrigin.reported}
+          onClick={aiOrigin.onOpen}
+          aria-label={`Made with AI: ${aiOrigin.label}. Show where it came from${aiOrigin.reported ? " (you reported a problem)" : ""}`}
+          title="Where this came from"
+        >
+          AI{aiOrigin.reported ? " · reported" : ""}
+        </button>
       )}
 
       {stale && !editing && (
