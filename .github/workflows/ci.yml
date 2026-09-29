@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      # The prompt evaluation against the deterministic mock provider needs no
+      # account or network: it checks that every recorded case still builds a
+      # valid request and that the harness and report run end to end. A live
+      # DeepSeek evaluation is a separate, explicit job with its own secret.
+      - name: Prompt evaluation (dry run)
+        run: npm run eval --workspace @ai-notebook/gateway -- --dry-run
+
+      - name: Prompt evaluation (mock provider)
+        run: npm run eval --workspace @ai-notebook/gateway -- --provider mock --label ci --out "$RUNNER_TEMP/prompt-eval"
+        env:
+          AI_PROVIDER: mock
