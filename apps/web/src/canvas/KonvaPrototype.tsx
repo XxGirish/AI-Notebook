@@ -75,7 +75,7 @@ import {
   TEXT_LINE_HEIGHT,
   TEXT_PADDING,
 } from "./textBox";
-import { cameraCentredOn, wheelDeltaInPixels, wheelZoomScale, zoomCameraAt, type Camera } from "./cameraMath";
+import { cameraCentredOn, pinchCamera, wheelDeltaInPixels, wheelZoomScale, zoomCameraAt, type Camera, type ScreenPoint } from "./cameraMath";
 
 /** Text the chat panel asked to place on this page, as one editable card. */
 export type CanvasInsertRequest = {
@@ -372,6 +372,61 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
     return () => {
       viewport.removeEventListener("wheel", handleWheel);
       viewport.removeEventListener("scroll", handleScroll);
+    };
+  }, []);
+
+  // Two fingers pinch to zoom and pan, whatever the tool. This listens at the
+  // viewport in the capture phase, ahead of the stages: the second finger never
+  // reaches them, and the first finger's gesture is cancelled, so a pinch that
+  // began as a one-finger stroke leaves no ink. Palm mode is the exception with
+  // an inking tool, because there several touches mean a resting hand.
+  const pinchStateRef = useRef({ tool, touchMode, camera, cancelGesture: () => undefined as void });
+  pinchStateRef.current = { tool, touchMode, camera, cancelGesture: () => finishInput(true) };
+  useEffect(() => {
+    const viewport = rootRef.current;
+    if (!viewport) return;
+    const touches = new Map<number, ScreenPoint>();
+    let pinch: { ids: [number, number]; startPoints: [ScreenPoint, ScreenPoint]; startCamera: Camera } | undefined;
+    const local = (event: PointerEvent): ScreenPoint => {
+      const rect = viewport.getBoundingClientRect();
+      return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    };
+
+    const handleDown = (event: PointerEvent) => {
+      if (event.pointerType !== "touch") return;
+      touches.set(event.pointerId, local(event));
+      const state = pinchStateRef.current;
+      if (pinch || touches.size !== 2 || (state.touchMode === "palm" && isInkTool(state.tool))) return;
+      const [first, second] = [...touches.entries()];
+      state.cancelGesture();
+      pinch = { ids: [first[0], second[0]], startPoints: [first[1], second[1]], startCamera: state.camera };
+      event.stopPropagation();
+      event.preventDefault();
+    };
+    const handleMove = (event: PointerEvent) => {
+      if (!touches.has(event.pointerId)) return;
+      touches.set(event.pointerId, local(event));
+      if (!pinch || !pinch.ids.includes(event.pointerId)) return;
+      event.stopPropagation();
+      const a = touches.get(pinch.ids[0]);
+      const b = touches.get(pinch.ids[1]);
+      if (a && b) setCamera(pinchCamera(pinch.startCamera, pinch.startPoints[0], pinch.startPoints[1], a, b));
+    };
+    const handleUp = (event: PointerEvent) => {
+      touches.delete(event.pointerId);
+      // The finger left on the glass does not resume drawing or panning.
+      if (pinch?.ids.includes(event.pointerId)) pinch = undefined;
+    };
+
+    viewport.addEventListener("pointerdown", handleDown, { capture: true });
+    viewport.addEventListener("pointermove", handleMove, { capture: true });
+    viewport.addEventListener("pointerup", handleUp, { capture: true });
+    viewport.addEventListener("pointercancel", handleUp, { capture: true });
+    return () => {
+      viewport.removeEventListener("pointerdown", handleDown, { capture: true });
+      viewport.removeEventListener("pointermove", handleMove, { capture: true });
+      viewport.removeEventListener("pointerup", handleUp, { capture: true });
+      viewport.removeEventListener("pointercancel", handleUp, { capture: true });
     };
   }, []);
 

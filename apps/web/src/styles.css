@@ -247,6 +247,8 @@ button { font: inherit; }
    under the writer mid-stroke. Written as :not(select) so a new tool is safe
    by default. */
 .canvas-viewport:not([data-tool="select"]) { touch-action: none; overscroll-behavior: contain; }
+/* Select keeps native one-finger scrolling inside cards and editors, but pinch belongs to the canvas, not browser zoom. */
+.canvas-viewport[data-tool="select"] { touch-action: pan-x pan-y; }
 .canvas-viewport[data-tool="pen"], .canvas-viewport[data-tool="pen-pro"], .canvas-viewport[data-tool="highlighter"], .canvas-viewport[data-tool="lasso"], .canvas-viewport[data-tool="rectangle"], .canvas-viewport[data-tool="ellipse"] { cursor: crosshair; }
 .canvas-viewport[data-tool="eraser"] { cursor: cell; }
 .canvas-viewport[data-tool="pan"] { cursor: grab; }

@@ -33,3 +33,20 @@ export function cameraCentredOn(camera: Camera, box: { x: number; y: number; wid
     y: viewport.height / 2 - (box.y + box.height / 2) * camera.scale,
   };
 }
+
+/**
+ * The camera during a two-finger pinch. The world point that was under the
+ * fingers' midpoint when the pinch began stays under their current midpoint,
+ * and the zoom follows the change in distance between them, so the page moves
+ * with the fingers as if held. Points are in viewport pixels.
+ */
+export function pinchCamera(start: Camera, startA: ScreenPoint, startB: ScreenPoint, a: ScreenPoint, b: ScreenPoint): Camera {
+  const startDistance = Math.hypot(startB.x - startA.x, startB.y - startA.y);
+  const distance = Math.hypot(b.x - a.x, b.y - a.y);
+  const scale = startDistance > 0 ? clampZoom(start.scale * (distance / startDistance)) : start.scale;
+  const startMid = { x: (startA.x + startB.x) / 2, y: (startA.y + startB.y) / 2 };
+  const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  const worldX = (startMid.x - start.x) / start.scale;
+  const worldY = (startMid.y - start.y) / start.scale;
+  return { scale, x: mid.x - worldX * scale, y: mid.y - worldY * scale };
+}
