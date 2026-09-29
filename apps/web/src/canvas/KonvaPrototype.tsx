@@ -29,6 +29,8 @@ import { useQuizAttempts } from "../components/useQuizAttempts";
 import { useStaleGeneratedObjects } from "../components/useStaleGeneratedObjects";
 import { PAPER_LABELS, PAPER_STYLES, type PaperStyle } from "../domain/paper";
 import { PaperSheet } from "./PaperSheet";
+import { CanvasBackdrop } from "./CanvasBackdrop";
+import { CANVAS_BACKGROUND_LABELS, CANVAS_BACKGROUNDS, readCanvasBackground, writeCanvasBackground, type CanvasBackground } from "./canvasBackground";
 import { useAiFeedback } from "../components/useAiFeedback";
 import { AiProvenanceDialog } from "../components/AiProvenanceDialog";
 import { createAiFeedback, generatingTransactions } from "../domain/aiFeedback";
@@ -212,6 +214,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
   // used (see beginInput); a passive stylus cannot be detected that way and
   // needs "palm", which the writer picks themselves.
   const [touchMode, setTouchMode] = useState<TouchMode>("finger");
+  const [canvasBackground, setCanvasBackground] = useState<CanvasBackground>(readCanvasBackground);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [fullscreenFallback, setFullscreenFallback] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
@@ -1669,6 +1672,21 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
         </label>
 
         <label className="touch-mode">
+          <span>Canvas</span>
+          <select
+            value={canvasBackground}
+            onChange={(event) => {
+              const next = event.target.value as CanvasBackground;
+              setCanvasBackground(next);
+              writeCanvasBackground(next);
+            }}
+            title="The pattern behind every page on this device; it is not saved in the notebook or its exports"
+          >
+            {CANVAS_BACKGROUNDS.map((style) => <option key={style} value={style}>{CANVAS_BACKGROUND_LABELS[style]}</option>)}
+          </select>
+        </label>
+
+        <label className="touch-mode">
           <span>Paper</span>
           <select
             value={fixture.paper ?? "none"}
@@ -1874,6 +1892,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
           <Stage width={size.width} height={size.height} className="konva-stage">
             <Layer>
               <Rect width={size.width} height={size.height} fill="#fbfaf5" onPointerDown={() => { setSelectedIds(new Set()); setFocusedObjectId(undefined); setEditingDiagramObjectId(undefined); }} />
+              <CanvasBackdrop style={canvasBackground} camera={camera} width={size.width} height={size.height} />
               {fixture.paper && (
                 <Group x={camera.x} y={camera.y} scaleX={camera.scale} scaleY={camera.scale} listening={false}>
                   <PaperSheet style={fixture.paper} width={fixture.width} height={fixture.height} />

@@ -27,7 +27,7 @@ A whole-notebook backup contains:
 - your reports on AI content;
 - a manifest with a SHA-256 hash of every file inside.
 
-It never contains your DeepSeek key, the gateway token, or gateway logs.
+It never contains your DeepSeek key, the gateway token, or gateway logs. Device preferences, such as the canvas pattern and touch mode, stay on the device and are not included.
 
 Keep archives somewhere that is backed up, such as a cloud drive. An archive is a ZIP file; its contents are readable JSON.
 

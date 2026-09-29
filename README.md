@@ -10,7 +10,7 @@ Notebooks live in your browser. Writing, editing, saving, undo and answering sto
 - Pen with pressure, a separate highlighter, whole-stroke eraser, and **Pen Pro**, which neatens handwriting in place after you pause (baseline, size, slant and spacing) while keeping your own letters.
 - Low-latency "wet ink" drawn outside React, a capacitive-stylus wobble filter, palm-rejection and stylus-only touch modes, and two-finger pinch to zoom and pan.
 - Text boxes, rectangles, ellipses, images (stored once by content hash), bound connectors, lasso and multi-select, move, resize, group, duplicate and delete, all through one undo/redo history.
-- Optional plain, lined or grid paper per page, inside the same infinite canvas.
+- A patterned canvas (dot grid by default; lined, ruled with margin, graph paper or plain), chosen per device, plus optional plain, lined or grid paper per page, inside the same infinite canvas.
 
 **Learning objects**
 - Editable text cards, LaTeX equations (rendered by KaTeX in untrusted mode), diagrams whose nodes and connectors stay bound when moved, and quizzes with stable option IDs.

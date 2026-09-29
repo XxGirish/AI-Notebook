@@ -11,7 +11,7 @@ export const PAPER_LABELS: Record<PaperStyle | "none", string> = { none: "No pap
 /** Close to college ruling at the default zoom, and a comfortable size for handwriting. */
 export const PAPER_RULE_SPACING = 32;
 const LINED_TOP_MARGIN = 96;
-const LINED_LEFT_MARGIN = 96;
+export const LINED_LEFT_MARGIN = 96;
 
 export const isPaperStyle = (value: unknown): value is PaperStyle => typeof value === "string" && (PAPER_STYLES as readonly string[]).includes(value);
 
