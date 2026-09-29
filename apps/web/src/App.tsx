@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { KonvaPrototype, type CanvasInsertOutcome, type CanvasInsertRequest } from "./canvas/KonvaPrototype";
 import { ChatDock } from "./components/chat/ChatDock";
+import { useMediaQuery } from "./components/useMediaQuery";
 import { PageSidebar } from "./components/PageSidebar";
 import type { AiTransactionRecord, NotebookObject } from "./domain/notebook";
 import { createNotebookPage, movePage, pageFromFixture, renamePage, replacePageObjects, setPagePaper, type NotebookPage } from "./domain/pages";
@@ -23,6 +24,19 @@ export function App() {
   const [canRestore, setCanRestore] = useState(false);
   const [canvasGeneration, setCanvasGeneration] = useState(0);
   const [libraryGeneration, setLibraryGeneration] = useState(0);
+  // Below 900px the page list is a drawer; see styles.css.
+  const narrowLayout = useMediaQuery("(max-width: 900px)");
+  const [pagesOpen, setPagesOpen] = useState(false);
+  const pagesToggleRef = useRef<HTMLButtonElement>(null);
+  const sidebarSlotRef = useRef<HTMLDivElement>(null);
+  // Off-screen on a narrow layout, the list is inert: out of the tab order and
+  // the accessibility tree. React 18 has no `inert` prop, so it is set directly.
+  useEffect(() => {
+    const slot = sidebarSlotRef.current;
+    if (!slot) return;
+    slot.inert = narrowLayout && !pagesOpen;
+    if (narrowLayout && pagesOpen) slot.querySelector<HTMLElement>(".page-link[aria-current='page'], .page-link")?.focus();
+  }, [narrowLayout, pagesOpen]);
   const [transferStatus, setTransferStatus] = useState<string>();
   const [writerStatus, setWriterStatus] = useState<WriterLeaseStatus>("checking");
   const [saveError, setSaveError] = useState<string>();
@@ -457,6 +471,18 @@ export function App() {
 
   return (
     <main className="app-shell">
+      <button type="button" className="pages-backdrop" data-open={narrowLayout && pagesOpen} aria-label="Close the page list" tabIndex={-1} onClick={() => setPagesOpen(false)} />
+      <div
+        className="page-sidebar-slot"
+        ref={sidebarSlotRef}
+        data-open={narrowLayout && pagesOpen}
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && narrowLayout && pagesOpen) {
+            setPagesOpen(false);
+            pagesToggleRef.current?.focus();
+          }
+        }}
+      >
       <PageSidebar
         pages={pages}
         activePageId={activePageId}
@@ -467,7 +493,10 @@ export function App() {
         transferStatus={transferStatus}
         writerStatus={writerStatus}
         onCreate={createPage}
-        onOpen={setActivePageId}
+        onOpen={(pageId) => {
+          setActivePageId(pageId);
+          setPagesOpen(false);
+        }}
         onRename={renameNotebookPage}
         onReorder={reorderNotebookPage}
         onDelete={deleteNotebookPage}
@@ -477,9 +506,19 @@ export function App() {
         onImport={(file) => { void importNotebook(file); }}
         onTakeOver={() => writerLeaseRef.current?.takeOver()}
       />
+      </div>
 
       <div className="notebook-workspace">
         <header className="app-header">
+          <button
+            ref={pagesToggleRef}
+            type="button"
+            className="pages-toggle"
+            aria-expanded={pagesOpen}
+            onClick={() => setPagesOpen((open) => !open)}
+          >
+            <span aria-hidden="true">☰</span> Pages
+          </button>
           <div>
             <p className="eyebrow">Reliable offline notebook · Phase 1</p>
             <h1>{activePage?.title ?? "Opening notebook…"}</h1>

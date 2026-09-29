@@ -30,6 +30,8 @@ button { font: inherit; }
 
 .notebook-workspace {
   min-width: 0;
+  /* One column that may shrink below its contents' width, so a wide toolbar wraps instead of widening the page. */
+  grid-template-columns: minmax(0, 1fr);
   min-height: calc(100vh - 28px);
   display: grid;
   grid-template-rows: auto auto minmax(560px, 1fr);
@@ -205,6 +207,9 @@ button { font: inherit; }
 .prototype[data-fullscreen-fallback="true"] { position: fixed; inset: 0; z-index: 1000; }
 .prototype:fullscreen .canvas-viewport, .prototype[data-fullscreen-fallback="true"] .canvas-viewport { min-height: 0; border-radius: 12px; }
 .prototype-toolbar {
+  /* The containing block for its visually hidden file input, which otherwise
+     escapes a scrolled toolbar and widens the page on a phone. */
+  position: relative;
   justify-self: stretch;
   flex-wrap: wrap;
   gap: 10px;
@@ -230,7 +235,7 @@ button { font: inherit; }
 .linear-reading-view summary { cursor: pointer; font-size: 0.82rem; font-weight: 750; }
 .linear-reading-view ol { max-height: 260px; margin: 10px 0 2px; padding-left: 24px; overflow-y: auto; }
 .linear-reading-view li, .linear-reading-view p { margin: 0 0 8px; color: #506064; font-size: 0.8rem; line-height: 1.45; white-space: pre-line; }
-.tool-group { display: flex; align-items: center; gap: 4px; }
+.tool-group { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .tool-group + .tool-group { padding-left: 8px; border-left: 1px solid #d8d2c6; }
 .size-control, .touch-mode { display: flex; align-items: center; gap: 7px; min-height: 40px; padding: 0 8px; color: #536267; font-size: 0.82rem; }
 .size-control input { width: 110px; accent-color: #255f5b; }
@@ -410,10 +415,35 @@ button { font: inherit; }
 
 button:focus-visible { outline: 3px solid #ef8c45; outline-offset: 2px; }
 
+.pages-toggle, .pages-backdrop { display: none; }
+
+/* Tablets in portrait and phones: the page list becomes a drawer over the canvas. */
+@media (max-width: 900px) {
+  .app-shell { grid-template-columns: minmax(0, 1fr); }
+  .page-sidebar-slot { position: fixed; inset: 0 auto 0 0; z-index: 900; width: min(300px, 86vw); padding: 10px 0 10px 10px; transform: translateX(-105%); transition: transform 180ms ease-out; }
+  .page-sidebar-slot[data-open="true"] { transform: none; }
+  .page-sidebar-slot .page-sidebar { position: static; height: 100%; min-height: 0; }
+  .pages-toggle { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 8px 14px; border: 1px solid #cbc5b8; border-radius: 12px; color: #255f5b; background: rgba(255, 255, 255, 0.72); font-weight: 750; cursor: pointer; }
+  .pages-backdrop { position: fixed; inset: 0; z-index: 899; border: 0; background: rgba(29, 42, 47, 0.32); }
+  .pages-backdrop[data-open="true"] { display: block; }
+  .notebook-workspace { min-height: calc(100vh - 28px); grid-template-rows: auto auto minmax(60vh, 1fr); }
+}
+/* Phones: the canvas matters most, so the toolbar becomes one strip that scrolls sideways and prototype notes are hidden. */
+@media (max-width: 640px) {
+  .app-header { flex-direction: row !important; flex-wrap: wrap; align-items: center !important; }
+  .app-header h1 { font-size: 1.6rem; }
+  .app-header p:not(.eyebrow), .app-header__badges .engine-badge, .experiment-banner { display: none; }
+  .prototype-toolbar { flex-wrap: nowrap !important; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; }
+  .prototype-toolbar > * { flex: 0 0 auto; }
+  .prototype-toolbar .tool-group { flex-wrap: nowrap; }
+  .notebook-workspace { grid-template-rows: auto auto minmax(70vh, 1fr); }
+}
+@media (max-width: 900px) and (prefers-reduced-motion: reduce) {
+  .page-sidebar-slot { transition: none; }
+}
+
 @media (max-width: 760px) {
-  .app-shell { padding: 10px; grid-template-columns: 190px minmax(0, 1fr); gap: 10px; }
-  .notebook-workspace { min-height: calc(100vh - 20px); grid-template-rows: auto auto minmax(650px, 1fr); }
-  .page-sidebar { top: 10px; height: calc(100vh - 20px); min-height: 650px; }
+  .app-shell { padding: 10px; gap: 10px; }
   .page-sidebar__header { padding: 16px 10px 12px; }
   .page-list { padding: 7px; }
   .app-header { align-items: stretch; flex-direction: column; gap: 12px; }
