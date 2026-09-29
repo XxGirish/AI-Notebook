@@ -4,15 +4,19 @@ import { bodyLimit } from "hono/body-limit";
 import { streamSSE } from "hono/streaming";
 import {
   AI_INTENTS,
+  ChatRequestSchema,
   GenerateRequestSchema,
+  MAX_CHAT_REQUEST_BYTES,
   MAX_GENERATE_REQUEST_BYTES,
+  type ChatEvent,
   type GatewayCapabilities,
   type GatewayErrorCode,
   type GatewayEvent,
+  type UsageReport,
 } from "@ai-notebook/ai-contract";
 import { runGeneration } from "./generation";
 import type { GenerationLimiter } from "./limits";
-import type { AiProvider } from "./providers/types";
+import { ProviderError, type AiProvider } from "./providers/types";
 
 export type GenerationLogRecord = {
   event: "generation";
@@ -21,7 +25,7 @@ export type GenerationLogRecord = {
   provider: string;
   model: string;
   configurationId: string;
-  outcome: "proposal" | "error";
+  outcome: "proposal" | "answer" | "error";
   errorCode?: GatewayErrorCode;
   calls: number;
   repairAttempts: number;
@@ -153,6 +157,102 @@ export function createGatewayApp(options: GatewayAppOptions) {
           clearTimeout(timeout);
           active.delete(request.requestId);
           admission.release(billedTokens);
+        }
+      });
+    },
+  );
+
+  // A chat turn shares the generation limiter, so a chat and a canvas action
+  // can never run at once and both count against the same daily budget.
+  app.post(
+    "/api/ai/chat",
+    bodyLimit({
+      maxSize: MAX_CHAT_REQUEST_BYTES,
+      onError: (c) => jsonError(c, 413, "request_too_large", "The question and its sources are too large to send"),
+    }),
+    async (c) => {
+      let body: unknown;
+      try {
+        body = await c.req.json();
+      } catch {
+        return jsonError(c, 400, "invalid_request", "The request body must be JSON");
+      }
+      const parsed = ChatRequestSchema.safeParse(body);
+      if (!parsed.success) {
+        const issue = parsed.error.issues[0];
+        return jsonError(c, 400, "invalid_request", `${issue.path.join(".") || "request"}: ${issue.message}`);
+      }
+      const request = parsed.data;
+
+      const admission = options.limiter.admit(request.requestId);
+      if (!admission.ok) return jsonError(c, admission.status, admission.code, admission.message, admission.code !== "duplicate_request");
+
+      const controller = new AbortController();
+      let timedOut = false;
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, options.generationTimeoutMs);
+      active.set(request.requestId, controller);
+      const startedAt = now();
+
+      return streamSSE(c, async (stream) => {
+        stream.onAbort(() => controller.abort());
+        const keepAlive = setInterval(() => {
+          void stream.write(": keep-alive\n\n");
+        }, options.keepAliveMs ?? 15_000);
+        const emit = async (event: ChatEvent) => {
+          if (stream.aborted) return;
+          await stream.writeSSE({ event: event.type, data: JSON.stringify(event) });
+        };
+        let billedTokens = 0;
+        let outcome: GenerationLogRecord["outcome"] = "answer";
+        let errorCode: GatewayErrorCode | undefined;
+        let usage: UsageReport = {};
+        try {
+          await emit({ type: "started", requestId: request.requestId, provider: options.provider.id, model: options.provider.model });
+          const result = await options.provider.chat({
+            request,
+            signal: controller.signal,
+            onDelta: (text) => emit({ type: "delta", text }),
+          });
+          usage = result.usage ?? {};
+          billedTokens = (result.usage?.promptTokens ?? 0) + (result.usage?.completionTokens ?? 0);
+          if (result.usage) await emit({ type: "usage", usage: result.usage });
+          await emit({ type: "complete" });
+        } catch (error) {
+          outcome = "error";
+          let code: GatewayErrorCode = "provider_unavailable";
+          let message = "The AI provider failed unexpectedly";
+          let retryable = true;
+          if (controller.signal.aborted) {
+            code = timedOut ? "timeout" : "cancelled";
+            message = timedOut ? "The answer took too long and was stopped" : "The answer was cancelled";
+            retryable = timedOut;
+          } else if (error instanceof ProviderError) {
+            ({ code, message, retryable } = error);
+          }
+          errorCode = code;
+          await emit({ type: "error", code, message, retryable });
+        } finally {
+          clearInterval(keepAlive);
+          clearTimeout(timeout);
+          active.delete(request.requestId);
+          admission.release(billedTokens);
+          options.log?.({
+            event: "generation",
+            requestId: request.requestId,
+            intent: "chat",
+            provider: options.provider.id,
+            model: options.provider.model,
+            configurationId: options.provider.chatConfigurationId,
+            outcome,
+            errorCode,
+            calls: 1,
+            repairAttempts: 0,
+            latencyMs: now() - startedAt,
+            ...usage,
+          });
         }
       });
     },

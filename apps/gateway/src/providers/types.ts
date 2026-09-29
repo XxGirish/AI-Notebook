@@ -1,4 +1,4 @@
-import type { GatewayErrorCode, GenerateRequest, UsageReport } from "@ai-notebook/ai-contract";
+import type { ChatRequest, GatewayErrorCode, GenerateRequest, UsageReport } from "@ai-notebook/ai-contract";
 
 export type RepairContext = {
   previousOutput: string;
@@ -19,12 +19,24 @@ export type ProviderResult = {
   usage?: UsageReport;
 };
 
+export type ChatCall = {
+  request: ChatRequest;
+  signal: AbortSignal;
+  /** Receives answer text as it streams. Reasoning fields never reach it. */
+  onDelta: (text: string) => void | Promise<void>;
+};
+
+export type ChatResult = { usage?: UsageReport };
+
 export interface AiProvider {
   readonly id: string;
   readonly model: string;
   readonly mode: string;
   readonly configurationId: string;
+  /** Identifies the chat prompt and settings, which differ from canvas generation. */
+  readonly chatConfigurationId: string;
   generate(call: ProviderCall): Promise<ProviderResult>;
+  chat(call: ChatCall): Promise<ChatResult>;
 }
 
 export class ProviderError extends Error {

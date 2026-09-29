@@ -1,9 +1,11 @@
 import { mockLessonProposal, type GenerateRequest } from "@ai-notebook/ai-contract";
-import { ProviderError, type AiProvider, type ProviderCall, type ProviderResult } from "./types";
+import { ProviderError, type AiProvider, type ChatCall, type ChatResult, type ProviderCall, type ProviderResult } from "./types";
 
 type MockProviderOptions = {
   /** Scripted raw outputs returned in order; used to exercise repair and failure paths. */
   script?: Array<string | ProviderError>;
+  /** Scripted chat answers returned in order; each is streamed in small pieces. */
+  chatScript?: Array<string | ProviderError>;
   delayMs?: number;
 };
 
@@ -16,10 +18,30 @@ export class MockProvider implements AiProvider {
   readonly model = "deterministic-fixture";
   readonly mode = "fixture";
   readonly configurationId = "mock-v1";
+  readonly chatConfigurationId = "mock-chat-v1";
   private readonly script: Array<string | ProviderError>;
+  private readonly chatScript: Array<string | ProviderError>;
 
   constructor(private readonly options: MockProviderOptions = {}) {
     this.script = [...(options.script ?? [])];
+    this.chatScript = [...(options.chatScript ?? [])];
+  }
+
+  async chat({ request, signal, onDelta }: ChatCall): Promise<ChatResult> {
+    if (this.options.delayMs) await abortableDelay(this.options.delayMs, signal);
+    if (signal.aborted) throw new ProviderError("cancelled", "The answer was cancelled", false);
+    const scripted = this.chatScript.shift();
+    if (scripted instanceof ProviderError) throw scripted;
+    const first = request.passages[0];
+    const answer = scripted ?? (first
+      ? `This is a deterministic mock answer. Your sources discuss this in ${first.origin} [${first.id}]. Connect a live provider for real answers.`
+      : "This is a deterministic mock answer. No passages from your sources matched the question. Connect a live provider for real answers.");
+    // Streamed in pieces so the panel's incremental rendering is exercised without a network.
+    for (const piece of answer.match(/.{1,24}/gs) ?? []) {
+      if (signal.aborted) throw new ProviderError("cancelled", "The answer was cancelled", false);
+      await onDelta(piece);
+    }
+    return { usage: { promptTokens: 0, completionTokens: 0 } };
   }
 
   async generate({ request, signal }: ProviderCall): Promise<ProviderResult> {
