@@ -3,7 +3,8 @@ import { KonvaPrototype, type CanvasInsertOutcome, type CanvasInsertRequest } fr
 import { ChatDock } from "./components/chat/ChatDock";
 import { PageSidebar } from "./components/PageSidebar";
 import type { AiTransactionRecord, NotebookObject } from "./domain/notebook";
-import { createNotebookPage, movePage, pageFromFixture, renamePage, replacePageObjects, type NotebookPage } from "./domain/pages";
+import { createNotebookPage, movePage, pageFromFixture, renamePage, replacePageObjects, setPagePaper, type NotebookPage } from "./domain/pages";
+import type { PaperStyle } from "./domain/paper";
 import { phaseZeroFixture } from "./fixtures/phaseZeroFixture";
 import { createStaticPageSvg, safeExportFilename } from "./export/staticPageExport";
 import { createNotebookArchive, MAX_ARCHIVE_BYTES, NOTEBOOK_ARCHIVE_MIME, readNotebookArchive } from "./persistence/notebookArchive";
@@ -311,6 +312,15 @@ export function App() {
     persist(updated, current.updatedAt);
   }, [activePageId, writerStatus]);
 
+  const setActivePagePaper = useCallback((paper: PaperStyle | undefined) => {
+    if (writerStatus !== "writer") return;
+    const current = pagesRef.current.find((page) => page.id === activePageId);
+    if (!current || current.paper === paper) return;
+    const updated = setPagePaper(current, paper);
+    replacePages(pagesRef.current.map((page) => page.id === activePageId ? updated : page));
+    persist(updated, current.updatedAt);
+  }, [activePageId, writerStatus]);
+
   const restoreActivePage = () => {
     if (writerStatus !== "writer") return;
     if (!activePageId) return;
@@ -488,6 +498,7 @@ export function App() {
             onObjectsChange={updateActivePageObjects}
             insertRequest={canvasInsert}
             onInsertRequestHandled={handleCanvasInsert}
+            onPaperChange={setActivePagePaper}
           />
         )}
       </div>

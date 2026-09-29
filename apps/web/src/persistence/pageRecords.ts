@@ -1,3 +1,4 @@
+import { isPaperStyle } from "../domain/paper";
 import type { AiTransactionRecord, NotebookObject } from "../domain/notebook";
 import { diagramAdapter } from "../domain/diagramAdapter";
 import { learningObjectAdapter } from "../domain/learningObjectAdapters";
@@ -98,6 +99,7 @@ export function migratePersistedPage(value: unknown): NotebookPage {
     title: normalizePageTitle(typeof value.title === "string" ? value.title : "Untitled page"),
     width: finiteNumber(value.width, 1280),
     height: finiteNumber(value.height, 820),
+    ...(isPaperStyle(value.paper) ? { paper: value.paper } : {}),
     objects: value.objects.map(migrateObject),
     aiTransactions,
     createdAt,

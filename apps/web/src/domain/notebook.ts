@@ -1,3 +1,4 @@
+import type { PaperStyle } from "./paper";
 export type PointSample = {
   x: number;
   y: number;
@@ -140,6 +141,8 @@ export type NotebookFixture = {
   title: string;
   width: number;
   height: number;
+  /** An optional sheet drawn behind the page's content; absent means none. */
+  paper?: PaperStyle;
   objects: NotebookObject[];
   aiTransactions: AiTransactionRecord[];
 };

@@ -387,3 +387,11 @@ describe(".ainotebook AI feedback", () => {
     })).rejects.toThrow(/invalid intent or reason/);
   });
 });
+
+describe(".ainotebook paper", () => {
+  it("round-trips a page's paper and rejects an unknown style", async () => {
+    const page = { ...pageFromFixture(phaseZeroFixture, 100), paper: "grid" as const };
+    expect((await readNotebookArchive(await createNotebookArchive([page], []))).pages[0].paper).toBe("grid");
+    await expect(createNotebookArchive([{ ...page, paper: "dotted" as never }], [])).rejects.toThrow(/unknown paper style/);
+  });
+});

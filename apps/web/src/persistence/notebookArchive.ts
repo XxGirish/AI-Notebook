@@ -2,6 +2,7 @@ import { strFromU8, strToU8, unzipSync, zipSync, type Unzipped } from "fflate";
 import type { AiTransactionRecord, NotebookObject } from "../domain/notebook";
 import { validateFixture } from "../domain/notebook";
 import type { NotebookPage } from "../domain/pages";
+import { isPaperStyle } from "../domain/paper";
 import type { QuizAttemptRecord } from "../domain/quizAttempts";
 import type { AiFeedbackRecord } from "../domain/aiFeedback";
 import { archivedSourceDocument, MAX_ARCHIVED_SOURCES, remapLibrary, validateAiFeedback, validateArchivedSource, validateChatMessages, validateQuizAttempts, type ArchivedSource, type NotebookLibrary } from "./archiveLibrary";
@@ -224,7 +225,8 @@ function validatePage(value: unknown, expectedSchemaVersion?: number): NotebookP
   if (!isRecord(value)) fail("a page record is not an object");
   if (!Number.isInteger(value.schemaVersion) || (value.schemaVersion as number) < 1 || (value.schemaVersion as number) > CURRENT_PAGE_SCHEMA_VERSION || (expectedSchemaVersion !== undefined && value.schemaVersion !== expectedSchemaVersion)) fail("a page uses an unsupported document schema");
   const pageSchemaVersion = value.schemaVersion as number;
-  assertOnlyKeys(value, ["schemaVersion", "id", "title", "width", "height", "objects", "createdAt", "updatedAt", ...(pageSchemaVersion >= 2 ? ["aiTransactions"] : [])], "page record");
+  assertOnlyKeys(value, ["schemaVersion", "id", "title", "width", "height", "paper", "objects", "createdAt", "updatedAt", ...(pageSchemaVersion >= 2 ? ["aiTransactions"] : [])], "page record");
+  if (value.paper !== undefined && !isPaperStyle(value.paper)) fail(`page ${String(value.id)} has an unknown paper style`);
   if (!isString(value.id, 200) || !isString(value.title, 10_000)) fail("a page has an invalid id or title");
   if (!isFiniteNumber(value.width) || value.width <= 0 || !isFiniteNumber(value.height) || value.height <= 0) fail(`page ${value.id} has invalid dimensions`);
   if (!isFiniteNumber(value.createdAt) || !isFiniteNumber(value.updatedAt)) fail(`page ${value.id} has invalid timestamps`);

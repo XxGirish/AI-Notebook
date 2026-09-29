@@ -1,5 +1,6 @@
 import type { ConnectorObject, InkTextObject, NotebookObject, StrokeObject, TextObject } from "../domain/notebook";
 import type { NotebookPage } from "../domain/pages";
+import { PAPER_COLORS, paperLines } from "../domain/paper";
 import type { AssetRecord } from "../persistence/notebookDatabase";
 import { getStrokePath } from "../canvas/strokePath";
 import { estimateTextWidth } from "../canvas/handwriting/handwritingLayout";
@@ -159,6 +160,16 @@ function textSvg(object: TextObject): string {
   return `<text dominant-baseline="central" font-family="${TEXT_FONT_FAMILY}" font-size="${object.fontSize}" fill="${escapeXml(object.color)}" xml:space="preserve">${spans}</text>`;
 }
 
+/** The page's optional sheet, with the same rules the canvas draws. */
+function paperSvg(page: NotebookPage): string {
+  if (!page.paper) return "";
+  const sheet = `<rect x="0" y="0" width="${page.width}" height="${page.height}" fill="${PAPER_COLORS.sheet}" stroke="${PAPER_COLORS.edge}"/>`;
+  const lines = paperLines(page.paper, page.width, page.height)
+    .map((line) => `<line x1="${line.x1}" y1="${line.y1}" x2="${line.x2}" y2="${line.y2}" stroke="${line.kind === "rule" ? PAPER_COLORS.rule : PAPER_COLORS.margin}" stroke-width="1"/>`)
+    .join("");
+  return `<g aria-hidden="true">${sheet}${lines}</g>`;
+}
+
 export async function createStaticPageSvg(page: NotebookPage, assets: AssetRecord[]): Promise<string> {
   const bounds = getStaticPageBounds(page);
   const width = bounds.right - bounds.left;
@@ -198,7 +209,7 @@ export async function createStaticPageSvg(page: NotebookPage, assets: AssetRecor
   const highlighters = page.objects.filter((object): object is StrokeObject => object.kind === "stroke" && object.tool === "highlighter").map(strokeSvg).join("");
   const pens = page.objects.filter((object): object is StrokeObject => object.kind === "stroke" && object.tool === "pen").map(strokeSvg).join("");
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${bounds.left} ${bounds.top} ${width} ${height}" role="img" aria-label="${escapeXml(page.title)}"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#537188"/></marker></defs><rect x="${bounds.left}" y="${bounds.top}" width="${width}" height="${height}" fill="#fbfaf5"/>${connectors}${shapes}${images}${diagramGroups}${cards}${inkTexts}${texts}${highlighters}${pens}</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${bounds.left} ${bounds.top} ${width} ${height}" role="img" aria-label="${escapeXml(page.title)}"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#537188"/></marker></defs><rect x="${bounds.left}" y="${bounds.top}" width="${width}" height="${height}" fill="#fbfaf5"/>${paperSvg(page)}${connectors}${shapes}${images}${diagramGroups}${cards}${inkTexts}${texts}${highlighters}${pens}</svg>`;
 }
 
 export function safeExportFilename(title: string): string {

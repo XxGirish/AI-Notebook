@@ -27,6 +27,8 @@ import { AI_CANVAS_ACTIONS, AI_REQUEST_PLANS } from "../ai/requestContext";
 import { LearningCard } from "../components/LearningCard";
 import { useQuizAttempts } from "../components/useQuizAttempts";
 import { useStaleGeneratedObjects } from "../components/useStaleGeneratedObjects";
+import { PAPER_LABELS, PAPER_STYLES, type PaperStyle } from "../domain/paper";
+import { PaperSheet } from "./PaperSheet";
 import { useAiFeedback } from "../components/useAiFeedback";
 import { AiProvenanceDialog } from "../components/AiProvenanceDialog";
 import { createAiFeedback, generatingTransactions } from "../domain/aiFeedback";
@@ -95,6 +97,7 @@ type Props = {
   onObjectsChange?: (objects: NotebookObject[], aiTransaction?: AiTransactionRecord) => void;
   insertRequest?: CanvasInsertRequest;
   onInsertRequestHandled?: (id: string, outcome: CanvasInsertOutcome) => void;
+  onPaperChange?: (paper: PaperStyle | undefined) => void;
 };
 
 const draftLabel = (intent: AiTransactionRecord["intent"]) => (intent === "chat_answer" ? "Chat answer" : AI_REQUEST_PLANS[intent].label);
@@ -185,7 +188,7 @@ const readImageDimensions = (blob: Blob) => new Promise<Size>((resolve, reject) 
   image.src = url;
 });
 
-export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, insertRequest, onInsertRequestHandled }: Props) {
+export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, insertRequest, onInsertRequestHandled, onPaperChange }: Props) {
   const prototypeRef = useRef<HTMLElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -1562,6 +1565,19 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
           </select>
         </label>
 
+        <label className="touch-mode">
+          <span>Paper</span>
+          <select
+            value={fixture.paper ?? "none"}
+            onChange={(event) => onPaperChange?.(event.target.value === "none" ? undefined : event.target.value as PaperStyle)}
+            disabled={readOnly || !onPaperChange}
+            title="An optional sheet behind this page; writing past its edge is kept"
+          >
+            <option value="none">{PAPER_LABELS.none}</option>
+            {PAPER_STYLES.map((style) => <option key={style} value={style}>{PAPER_LABELS[style]}</option>)}
+          </select>
+        </label>
+
         <div className="tool-group" role="group" aria-label="History">
           <button type="button" disabled={readOnly || history.past.length === 0} onClick={() => setHistory(undoHistory)} title="Undo (Ctrl+Z)">Undo</button>
           <button type="button" disabled={readOnly || history.future.length === 0} onClick={() => setHistory(redoHistory)} title="Redo (Ctrl+Y)">Redo</button>
@@ -1755,6 +1771,11 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
           <Stage width={size.width} height={size.height} className="konva-stage">
             <Layer>
               <Rect width={size.width} height={size.height} fill="#fbfaf5" onPointerDown={() => { setSelectedIds(new Set()); setFocusedObjectId(undefined); setEditingDiagramObjectId(undefined); }} />
+              {fixture.paper && (
+                <Group x={camera.x} y={camera.y} scaleX={camera.scale} scaleY={camera.scale} listening={false}>
+                  <PaperSheet style={fixture.paper} width={fixture.width} height={fixture.height} />
+                </Group>
+              )}
             </Layer>
             <Layer listening={tool === "select"}>
               <Group x={camera.x} y={camera.y} scaleX={camera.scale} scaleY={camera.scale}>

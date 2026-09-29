@@ -1,3 +1,4 @@
+import type { PaperStyle } from "./paper";
 import type { NotebookFixture, NotebookObject } from "./notebook";
 
 export type NotebookPage = NotebookFixture & {
@@ -31,6 +32,11 @@ export function pageFromFixture(fixture: NotebookFixture, now = Date.now()): Not
     createdAt: now,
     updatedAt: now,
   };
+}
+
+export function setPagePaper(page: NotebookPage, paper: PaperStyle | undefined, now = Date.now()): NotebookPage {
+  const { paper: _previous, ...rest } = page;
+  return { ...rest, ...(paper ? { paper } : {}), updatedAt: Math.max(now, page.updatedAt + 1) };
 }
 
 export function renamePage(page: NotebookPage, title: string, now = Date.now()): NotebookPage {

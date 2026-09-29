@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { NotebookPage } from "../domain/pages";
+import { paperLines } from "../domain/paper";
 import { createStaticPageSvg, getStaticPageBounds, safeExportFilename } from "./staticPageExport";
 
 const page: NotebookPage = {
@@ -73,5 +74,17 @@ describe("static page export", () => {
 
   it("creates a filesystem-safe SVG name", () => {
     expect(safeExportFilename("  Motion & forces!  ")).toBe("motion-forces.svg");
+  });
+});
+
+describe("static export of paper", () => {
+  it("draws the sheet and its rules behind the content", async () => {
+    const lined = { ...page, paper: "lined" as const };
+    const svg = await createStaticPageSvg(lined, []);
+    const sheet = svg.indexOf(`width="${lined.width}" height="${lined.height}" fill="#ffffff"`);
+    expect(sheet).toBeGreaterThan(-1);
+    const paperGroup = svg.slice(svg.lastIndexOf("<g aria-hidden=\"true\">", sheet), svg.indexOf("</g>", sheet));
+    expect(paperGroup.match(/<line /g)?.length).toBe(paperLines("lined", lined.width, lined.height).length);
+    expect(await createStaticPageSvg(page, [])).not.toContain("<g aria-hidden=\"true\">");
   });
 });
