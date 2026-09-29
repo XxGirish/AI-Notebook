@@ -79,6 +79,14 @@ This is a personal alpha. In particular:
 
 `IMPLEMENTATION_PLAN.md` records every milestone with what was and was not checked; `docs/decisions/` explains each settled choice.
 
+## Guides
+
+- [Self-hosting and using a tablet](docs/guides/self-hosting.md), including HTTPS on your network
+- [Backup, restore and moving between devices](docs/guides/backup-and-restore.md)
+- [Privacy and data flow](docs/guides/privacy.md)
+- [Compatibility](docs/guides/compatibility.md): what has and has not been tested
+- [Contributing](CONTRIBUTING.md) and [reporting a security problem](SECURITY.md)
+
 ## Layout
 
 ```text
