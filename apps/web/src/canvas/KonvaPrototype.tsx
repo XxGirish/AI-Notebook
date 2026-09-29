@@ -68,11 +68,20 @@ import {
 } from "./textBox";
 import { wheelDeltaInPixels, wheelZoomScale, zoomCameraAt, type Camera } from "./cameraMath";
 
+/** Text the chat panel asked to place on this page, as one editable card. */
+export type CanvasInsertRequest = { id: string; title: string; body: string; provider: string; model: string };
+export type CanvasInsertOutcome = { ok: true } | { ok: false; message: string };
+
 type Props = {
   fixture: NotebookFixture;
   readOnly?: boolean;
   onObjectsChange?: (objects: NotebookObject[], aiTransaction?: AiTransactionRecord) => void;
+  insertRequest?: CanvasInsertRequest;
+  onInsertRequestHandled?: (id: string, outcome: CanvasInsertOutcome) => void;
 };
+
+const draftLabel = (intent: AiTransactionRecord["intent"]) => (intent === "chat_answer" ? "Chat answer" : AI_REQUEST_PLANS[intent].label);
+const clampText = (value: string, limit: number) => (value.length <= limit ? value : `${value.slice(0, limit - 1)}…`);
 type Position = { x: number; y: number };
 type Size = { width: number; height: number };
 type Gesture = {
@@ -159,7 +168,7 @@ const readImageDimensions = (blob: Blob) => new Promise<Size>((resolve, reject) 
   image.src = url;
 });
 
-export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: Props) {
+export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, insertRequest, onInsertRequestHandled }: Props) {
   const prototypeRef = useRef<HTMLElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -695,6 +704,67 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
       setAiDraftError(error instanceof Error ? error.message : "The draft became stale and was not applied.");
     }
   };
+
+  /**
+   * Places a chat answer the writer explicitly asked for. It is additive, so it
+   * goes straight onto the page through the same validation and layout as any
+   * AI proposal, as one undoable step, without a second confirmation.
+   */
+  const handledInsertIdsRef = useRef(new Set<string>());
+  useEffect(() => {
+    if (!insertRequest || handledInsertIdsRef.current.has(insertRequest.id)) return;
+    handledInsertIdsRef.current.add(insertRequest.id);
+    const finish = (outcome: CanvasInsertOutcome) => onInsertRequestHandled?.(insertRequest.id, outcome);
+    if (readOnly) return finish({ ok: false, message: "This tab is read-only; the notebook is open for writing in another tab." });
+    if (aiDraft || aiRun) return finish({ ok: false, message: "Finish or discard the AI draft on the page first." });
+    try {
+      const requestId = `chat-${insertRequest.id}`;
+      const proposal = validateCanvasProposal({
+        schemaVersion: 1,
+        operations: [{
+          type: "insert_explanation",
+          localId: "answer",
+          anchor: { relation: selectionBounds ? "right_of_selection" : "viewport_center" },
+          content: { kind: "text", title: clampText(insertRequest.title.trim() || "Study assistant", 160), body: clampText(insertRequest.body.trim(), 8_000) },
+        }],
+      }, {
+        requestId,
+        pageId: fixture.id,
+        permittedOperations: new Set<SemanticOperationType>(["insert_explanation"]),
+        targetObjects: new Map(),
+        maxOperations: 1,
+      });
+      const batch = prepareCanvasBatch({
+        transactionId: `transaction-${crypto.randomUUID()}`,
+        pageId: fixture.id,
+        existingObjects: objects,
+        proposal,
+        provenance: {
+          requestId,
+          intent: "chat_answer",
+          provider: insertRequest.provider,
+          model: insertRequest.model,
+          configurationId: "chat",
+          proposalSchemaVersion: proposal.schemaVersion,
+          sources: [],
+        },
+        selectionBounds,
+        viewportCenter,
+      });
+      const result = applyCanvasBatch(fixture.id, objects, batch, committedAiTransactionIdsRef.current);
+      if (!result.applied) return finish({ ok: false, message: "The answer was already added." });
+      pendingAiTransactionRef.current = transactionRecordFromBatch(batch);
+      committedAiTransactionIdsRef.current.add(batch.transactionId);
+      setHistory((current) => commitHistory(current, result.objects));
+      setSelectedIds(new Set(batch.generatedObjectIds));
+      setTool("select");
+      finish({ ok: true });
+    } catch (error) {
+      finish({ ok: false, message: error instanceof Error ? error.message : "The answer could not be added to the page." });
+    }
+  // Only a new request should run this; the page state it reads is current at that render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [insertRequest]);
 
   const groupSelection = () => {
     if (!canGroup) return;
@@ -1450,7 +1520,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange }: P
                 {aiRun
                   ? AI_REQUEST_PLANS[aiRun.intent].label
                   : aiDraft
-                    ? `${AI_REQUEST_PLANS[aiDraft.provenance.intent].label} draft`
+                    ? `${draftLabel(aiDraft.provenance.intent)} draft`
                     : "Nothing was added"}
               </strong>
               <span role={aiRun ? "status" : undefined}>
