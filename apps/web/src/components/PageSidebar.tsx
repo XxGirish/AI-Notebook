@@ -132,7 +132,7 @@ export function PageSidebar({ pages, activePageId, saveStatus, saveError, storag
                 setDragging(undefined);
               }}
             >
-              <span aria-hidden="true">â ¿</span>
+              <span aria-hidden="true">⠿</span>
             </button>
             {renamingId === page.id ? (
               <input
