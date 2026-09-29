@@ -27,9 +27,14 @@ type Props = {
   onEditText: (title: string, body: string) => void;
   onEditEquation: (title: string, latex: string) => void;
   onEditQuiz: (prompt: string, options: QuizOption[], correctOptionId: string, rationale: string) => void;
+  /** Called with the chosen option when a quiz is answered, so the attempt can be recorded. */
+  onAnswerQuiz?: (optionId: string) => void;
+  /** A short account of earlier answers to this quiz, if any. */
+  attemptHistory?: string;
+  attemptError?: string;
 };
 
-export function LearningCard({ object, position, size, cameraScale, selected, resizable, readOnly, onSelect, onMove, onMoveEnd, onResize, onResizeEnd, onEditText, onEditEquation, onEditQuiz }: Props) {
+export function LearningCard({ object, position, size, cameraScale, selected, resizable, readOnly, onSelect, onMove, onMoveEnd, onResize, onResizeEnd, onEditText, onEditEquation, onEditQuiz, onAnswerQuiz, attemptHistory, attemptError }: Props) {
   const [answer, setAnswer] = useState<string>();
   const [editing, setEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState(object.kind === "text-card" || object.kind === "equation-card" ? object.title : "");
@@ -280,7 +285,10 @@ export function LearningCard({ object, position, size, cameraScale, selected, re
                   type="button"
                   data-state={state}
                   aria-pressed={isChosen}
-                  onClick={() => setAnswer(option.id)}
+                  onClick={() => {
+                    setAnswer(option.id);
+                    onAnswerQuiz?.(option.id);
+                  }}
                 >
                   {option.label}
                 </button>
@@ -293,6 +301,8 @@ export function LearningCard({ object, position, size, cameraScale, selected, re
               {renderModel.rationale}
             </p>
           )}
+          {attemptHistory && <p className="quiz-history">{attemptHistory}</p>}
+          {attemptError && <p className="quiz-history quiz-history--error" role="alert">{attemptError}</p>}
         </>
       )}
 

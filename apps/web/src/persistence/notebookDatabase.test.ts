@@ -12,6 +12,8 @@ import {
   savePage,
   storeImportedNotebook,
   loadLibrary,
+  addQuizAttempt,
+  loadQuizAttempts,
 } from "./notebookDatabase";
 import { PageWriteConflictError } from "./pageRecords";
 
@@ -253,5 +255,37 @@ describe("asset cleanup", () => {
     await database.open();
     expect((await database.table("assets").toArray()).map((asset) => asset.hash).sort()).toEqual([hashOf("a"), hashOf("b")]);
     database.close();
+  });
+});
+
+describe("quiz attempts (database version 6)", () => {
+  const attempt = (id: string, pageId: string, answeredAt: number) => ({
+    id, pageId, quizId: "quiz", quizRevision: 1, chosenOptionId: "a", correct: true, sequence: 1, answeredAt,
+  });
+
+  it("keeps attempts per page in the order they were given and never overwrites one", async () => {
+    const page = newPage("Quiz page");
+    await savePage(page);
+    await addQuizAttempt(attempt("second", page.id, 20));
+    await addQuizAttempt(attempt("first", page.id, 10));
+    await addQuizAttempt(attempt("elsewhere", "another-page", 5));
+    await expect(addQuizAttempt({ ...attempt("first", page.id, 10), correct: false })).rejects.toThrow();
+
+    const stored = await loadQuizAttempts(page.id);
+    expect(stored.map((entry) => [entry.id, entry.correct])).toEqual([["first", true], ["second", true]]);
+    expect((await loadLibrary()).quizAttempts.map((entry) => entry.id)).toEqual(expect.arrayContaining(["first", "second", "elsewhere"]));
+  });
+
+  it("removes a page's attempts together with the page", async () => {
+    const page = newPage("Deleted with answers");
+    const kept = newPage("Kept");
+    await savePage(page);
+    await savePage(kept);
+    await addQuizAttempt(attempt("gone", page.id, 1));
+    await addQuizAttempt(attempt("stays", kept.id, 2));
+
+    await deletePage(page.id, page.updatedAt);
+    expect(await loadQuizAttempts(page.id)).toEqual([]);
+    expect((await loadQuizAttempts(kept.id)).map((entry) => entry.id)).toEqual(["stays"]);
   });
 });

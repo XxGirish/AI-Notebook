@@ -335,6 +335,8 @@ button { font: inherit; }
 .quiz-options button[data-state="correct"] { border-color: #35836d; background: #e3f4ec; }
 .quiz-options button[data-state="incorrect"] { border-color: #bf6348; background: #fbe8e2; }
 .quiz-feedback { margin-top: 10px !important; color: #303e41 !important; }
+.quiz-history { margin-top: 8px !important; color: #5d6a6d !important; font-size: 0.78rem !important; }
+.quiz-history--error { color: #a3341f !important; }
 
 .canvas-status {
   position: absolute;

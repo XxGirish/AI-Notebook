@@ -5,6 +5,7 @@ import { pageFromFixture } from "../domain/pages";
 import { phaseZeroFixture } from "../fixtures/phaseZeroFixture";
 import type { ArchivedSource } from "./archiveLibrary";
 import type { AssetRecord, ChatMessageRecord } from "./notebookDatabase";
+import type { QuizAttemptRecord } from "../domain/quizAttempts";
 import { createNotebookArchive, readNotebookArchive } from "./notebookArchive";
 
 async function assetRecord(bytes: Uint8Array, mimeType = "image/png"): Promise<AssetRecord> {
@@ -225,7 +226,7 @@ describe(".ainotebook library (sources and chat)", () => {
 
   it("round-trips sources, passages and chat with fresh ids and remapped citations", async () => {
     const { page, archive } = await archiveWithLibrary();
-    expect(Object.keys(unzipSync(archive)).sort()).toEqual(["chat.json", "manifest.json", "pages/0000.json", "sources/0000.json", "sources/0001.json"]);
+    expect(Object.keys(unzipSync(archive)).sort()).toEqual(["attempts.json", "chat.json", "manifest.json", "pages/0000.json", "sources/0000.json", "sources/0001.json"]);
 
     let nextId = 0;
     const imported = await readNotebookArchive(archive, { now: 1_000, idFactory: () => `copy-${++nextId}` });
@@ -292,5 +293,56 @@ describe(".ainotebook library (sources and chat)", () => {
     const files = unzipSync(archive);
     files["sources/0002.json"] = strToU8("{}");
     await expect(readNotebookArchive(zipSync(files))).rejects.toThrow(/unexpected archive entry/);
+  });
+});
+
+describe(".ainotebook quiz attempts", () => {
+  const attempt = (id: string, overrides: Partial<QuizAttemptRecord> = {}): QuizAttemptRecord => ({
+    id, pageId: "phase-zero-physics", quizId: "quiz-force", quizRevision: 1, chosenOptionId: "option-double", correct: false, sequence: 1, answeredAt: 50, ...overrides,
+  });
+
+  it("round-trips attempts pointing at the imported quiz and its remapped options", async () => {
+    const page = pageFromFixture(phaseZeroFixture, 100);
+    const archive = await createNotebookArchive([page], [], undefined, {
+      sources: [],
+      chatMessages: [],
+      quizAttempts: [
+        attempt("a1"),
+        attempt("a2", { chosenOptionId: "option-half", correct: true, sequence: 2, answeredAt: 60 }),
+        // An answer to a quiz that was later deleted, with an option that no longer exists.
+        attempt("a3", { quizId: "quiz-deleted", chosenOptionId: "option-gone", answeredAt: 70 }),
+        attempt("a4", { quizId: "quiz-deleted", chosenOptionId: "option-gone", sequence: 2, answeredAt: 80 }),
+        // Left behind by a page that is not being exported.
+        attempt("orphan", { pageId: "page-deleted-elsewhere" }),
+      ],
+    });
+
+    const imported = await readNotebookArchive(archive, { now: 1_000 });
+    const quiz = imported.pages[0].objects.find((object) => object.kind === "quiz-card")!;
+    if (quiz.kind !== "quiz-card") throw new Error("expected a quiz");
+    const labelOf = (optionId: string) => quiz.options.find((option) => option.id === optionId)?.label;
+
+    expect(imported.quizAttempts).toHaveLength(4);
+    const [first, second, deletedFirst, deletedSecond] = imported.quizAttempts;
+    expect(first).toMatchObject({ pageId: imported.pages[0].id, quizId: quiz.id, correct: false, sequence: 1 });
+    expect(labelOf(first.chosenOptionId)).toBe("It doubles");
+    expect(second.chosenOptionId).toBe(quiz.correctOptionId);
+    expect(new Set(imported.quizAttempts.map((entry) => entry.id)).size).toBe(4);
+    expect(imported.quizAttempts.map((entry) => entry.id)).not.toContain("a1");
+    // The deleted quiz keeps one consistent stand-in identity across its answers.
+    expect(deletedFirst.quizId).toBe(deletedSecond.quizId);
+    expect(deletedFirst.chosenOptionId).toBe(deletedSecond.chosenOptionId);
+    expect(imported.pages[0].objects.map((object) => object.id)).not.toContain(deletedFirst.quizId);
+  });
+
+  it("rejects an attempt that claims a page the archive does not contain", async () => {
+    const page = pageFromFixture(phaseZeroFixture, 100);
+    const files = unzipSync(await createNotebookArchive([page], [], undefined, { sources: [], chatMessages: [], quizAttempts: [attempt("a1")] }));
+    const forged = strToU8(JSON.stringify([attempt("a1", { pageId: "someone-elses-page" })]));
+    files["attempts.json"] = forged;
+    const manifest = JSON.parse(new TextDecoder().decode(files["manifest.json"]));
+    manifest.attempts.sha256 = await sha256(forged);
+    files["manifest.json"] = strToU8(JSON.stringify(manifest));
+    await expect(readNotebookArchive(zipSync(files))).rejects.toThrow(/page that is not in the archive/);
   });
 });

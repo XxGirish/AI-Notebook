@@ -24,6 +24,8 @@ import { mockLessonProposal, validateCanvasProposal, type AiIntent, type Semanti
 import { requestAiDraft, type AiDraftPhase } from "../ai/aiSession";
 import { AI_CANVAS_ACTIONS, AI_REQUEST_PLANS } from "../ai/requestContext";
 import { LearningCard } from "../components/LearningCard";
+import { useQuizAttempts } from "../components/useQuizAttempts";
+import { describeQuizAttempts, summarizeQuizAttempts } from "../domain/quizAttempts";
 import { DiagramLabelEditor } from "../components/DiagramLabelEditor";
 import { InkTextEditor } from "../components/InkTextEditor";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -175,6 +177,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
   const size = useElementSize(rootRef);
   const [tool, setTool] = useState<Tool>("select");
   const [history, setHistory] = useState(() => createHistory(fixture.objects));
+  const quizAttempts = useQuizAttempts(fixture.id);
   const [camera, setCamera] = useState<Camera>({ x: 24, y: 24, scale: 0.86 });
   const [penSize, setPenSize] = useState(4.5);
   const [highlighterSize, setHighlighterSize] = useState(22);
@@ -1897,6 +1900,11 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
               onEditText={(title, body) => updateTextCard(card.id, title, body)}
               onEditEquation={(title, latex) => updateEquationCard(card.id, title, latex)}
               onEditQuiz={(prompt, options, correctOptionId, rationale) => updateQuizCard(card.id, prompt, options, correctOptionId, rationale)}
+              {...(card.kind === "quiz-card" ? {
+                onAnswerQuiz: (optionId: string) => void quizAttempts.recordAnswer(card, optionId),
+                attemptHistory: describeQuizAttempts(summarizeQuizAttempts(card, quizAttempts.attempts)),
+                attemptError: quizAttempts.failure && (quizAttempts.failure.quizId === card.id || quizAttempts.failure.quizId === "") ? quizAttempts.failure.message : undefined,
+              } : {})}
             />
           ))}
         </div>

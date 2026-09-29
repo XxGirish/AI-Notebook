@@ -1,6 +1,7 @@
 import Dexie, { type EntityTable, type Table, type Transaction } from "dexie";
 import type { NotebookObject } from "../domain/notebook";
 import type { NotebookPage } from "../domain/pages";
+import type { QuizAttemptRecord } from "../domain/quizAttempts";
 import { orphanAssetHashes } from "./assetCleanup";
 import {
   applyRecoveryPatch,
@@ -73,6 +74,7 @@ class NotebookDatabase extends Dexie {
   sources!: EntityTable<SourceRecord, "id">;
   sourceChunks!: EntityTable<SourceChunkRecord, "id">;
   chatMessages!: EntityTable<ChatMessageRecord, "id">;
+  quizAttempts!: EntityTable<QuizAttemptRecord, "id">;
 
   constructor(name = "ai-notebook") {
     super(name);
@@ -110,6 +112,18 @@ class NotebookDatabase extends Dexie {
       sources: "id, addedAt, contentHash",
       sourceChunks: "id, sourceId",
       chatMessages: "id, createdAt",
+    });
+    // Version 6 adds quiz attempts, kept outside page documents so answering a
+    // quiz never rewrites the page and a page edit never rewrites an attempt.
+    this.version(6).stores({
+      pages: "id, createdAt, updatedAt",
+      pageObjects: "[pageId+objectId], pageId, kind",
+      recoverySnapshots: "pageId, capturedAt",
+      assets: "hash, createdAt",
+      sources: "id, addedAt, contentHash",
+      sourceChunks: "id, sourceId",
+      chatMessages: "id, createdAt",
+      quizAttempts: "id, pageId, answeredAt",
     });
   }
 }
@@ -238,12 +252,14 @@ export function savePage(page: NotebookPage, expectedUpdatedAt?: number): Promis
 export function deletePage(pageId: string, expectedUpdatedAt: number, replacement?: NotebookPage): Promise<void> {
   return enqueuePageWrite(pageId, async () => {
     try {
-      await database.transaction("rw", database.pages, database.pageObjects, database.recoverySnapshots, async () => {
+      await database.transaction("rw", [database.pages, database.pageObjects, database.recoverySnapshots, database.quizAttempts], async () => {
         const current = await database.pages.get(pageId);
         assertExpectedPageVersion(current, expectedUpdatedAt, pageId);
         await database.pages.delete(pageId);
         await database.pageObjects.where("pageId").equals(pageId).delete();
         await database.recoverySnapshots.delete(pageId);
+        // A deleted page cannot come back, so neither can its quizzes' answers.
+        await database.quizAttempts.where("pageId").equals(pageId).delete();
         if (replacement) {
           const split = splitPage(replacement);
           await database.pageObjects.bulkAdd(structuredClone(split.objects));
@@ -329,22 +345,24 @@ export async function loadAssets(hashes: Iterable<string>): Promise<AssetRecord[
 export type ImportedLibrary = {
   sources: { source: SourceRecord; chunks: SourceChunkRecord[] }[];
   chatMessages: ChatMessageRecord[];
+  quizAttempts?: QuizAttemptRecord[];
 };
 
-/** Stores an imported copy in one transaction: a failure leaves no page, source or message of it behind. */
+/** Stores an imported copy in one transaction: a failure leaves no page, source, message or attempt of it behind. */
 export async function storeImportedNotebook(
   pages: NotebookPage[],
   assets: AssetRecord[],
   library: ImportedLibrary = { sources: [], chatMessages: [] },
 ): Promise<void> {
   const split = pages.map(splitPage);
-  await database.transaction("rw", [database.pages, database.pageObjects, database.assets, database.sources, database.sourceChunks, database.chatMessages], async () => {
+  await database.transaction("rw", [database.pages, database.pageObjects, database.assets, database.sources, database.sourceChunks, database.chatMessages, database.quizAttempts], async () => {
     await database.assets.bulkPut(assets);
     await database.pageObjects.bulkAdd(split.flatMap((page) => page.objects));
     await database.pages.bulkAdd(split.map((page) => page.metadata));
     await database.sources.bulkAdd(library.sources.map((entry) => entry.source));
     await database.sourceChunks.bulkAdd(library.sources.flatMap((entry) => entry.chunks));
     await database.chatMessages.bulkAdd(library.chatMessages);
+    await database.quizAttempts.bulkAdd(library.quizAttempts ?? []);
   });
   for (const page of pages) rememberSavedObjects(page);
 }
@@ -402,13 +420,14 @@ export async function deleteSource(sourceId: string): Promise<void> {
   });
 }
 
-/** Every source with its passages, and the chat history, read in one consistent snapshot for export. */
-export async function loadLibrary(): Promise<ImportedLibrary> {
-  return database.transaction("r", database.sources, database.sourceChunks, database.chatMessages, async () => {
-    const [sources, chunks, chatMessages] = await Promise.all([
+/** Every source with its passages, the chat history and quiz attempts, read in one consistent snapshot for export. */
+export async function loadLibrary(): Promise<Required<ImportedLibrary>> {
+  return database.transaction("r", [database.sources, database.sourceChunks, database.chatMessages, database.quizAttempts], async () => {
+    const [sources, chunks, chatMessages, quizAttempts] = await Promise.all([
       database.sources.orderBy("addedAt").toArray(),
       database.sourceChunks.toArray(),
       database.chatMessages.orderBy("createdAt").toArray(),
+      database.quizAttempts.orderBy("answeredAt").toArray(),
     ]);
     const chunksBySource = new Map<string, SourceChunkRecord[]>();
     for (const chunk of chunks) {
@@ -419,8 +438,22 @@ export async function loadLibrary(): Promise<ImportedLibrary> {
     return {
       sources: sources.map((source) => ({ source, chunks: (chunksBySource.get(source.id) ?? []).sort((left, right) => left.ordinal - right.ordinal) })),
       chatMessages,
+      quizAttempts,
     };
   });
+}
+
+export async function loadQuizAttempts(pageId: string): Promise<QuizAttemptRecord[]> {
+  return (await database.quizAttempts.where("pageId").equals(pageId).toArray()).sort((left, right) => left.answeredAt - right.answeredAt);
+}
+
+/**
+ * Adds one attempt. `add` rather than `put`: an existing attempt is never
+ * overwritten. Attempts are safe to record from a read-only tab too, because
+ * two tabs adding distinct records cannot overwrite each other's work.
+ */
+export async function addQuizAttempt(attempt: QuizAttemptRecord): Promise<void> {
+  await database.quizAttempts.add(structuredClone(attempt));
 }
 
 export async function loadChatMessages(): Promise<ChatMessageRecord[]> {

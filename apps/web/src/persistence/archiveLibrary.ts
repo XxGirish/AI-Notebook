@@ -1,3 +1,4 @@
+import type { QuizAttemptRecord } from "../domain/quizAttempts";
 import type { ChatCitation, ChatMessageRecord, SourceChunkRecord, SourceRecord } from "./notebookDatabase";
 
 /**
@@ -7,10 +8,11 @@ import type { ChatCitation, ChatMessageRecord, SourceChunkRecord, SourceRecord }
  */
 
 export type ArchivedSource = { source: SourceRecord; chunks: SourceChunkRecord[] };
-export type NotebookLibrary = { sources: ArchivedSource[]; chatMessages: ChatMessageRecord[] };
+export type NotebookLibrary = { sources: ArchivedSource[]; chatMessages: ChatMessageRecord[]; quizAttempts?: QuizAttemptRecord[] };
 
 export const MAX_ARCHIVED_SOURCES = 200;
 export const MAX_ARCHIVED_CHAT_MESSAGES = 5_000;
+export const MAX_ARCHIVED_QUIZ_ATTEMPTS = 50_000;
 const MAX_CHUNKS_PER_SOURCE = 5_000;
 const MAX_CHUNK_CHARACTERS = 4_000;
 const MAX_MESSAGE_CHARACTERS = 100_000;
@@ -139,6 +141,31 @@ export function validateChatMessages(value: unknown): ChatMessageRecord[] {
       ...(message.incomplete !== undefined ? { incomplete: message.incomplete as boolean } : {}),
       ...(message.provider !== undefined ? { provider: message.provider as string } : {}),
       ...(message.model !== undefined ? { model: message.model as string } : {}),
+    };
+  });
+}
+
+/** Checks attempt records against the pages they claim to belong to; grading itself is kept as recorded. */
+export function validateQuizAttempts(value: unknown, pageIds: ReadonlySet<string>): QuizAttemptRecord[] {
+  if (!Array.isArray(value) || value.length > MAX_ARCHIVED_QUIZ_ATTEMPTS) fail("the quiz attempt list is invalid or too long");
+  const ids = new Set<string>();
+  return value.map((attempt): QuizAttemptRecord => {
+    if (!isRecord(attempt)) fail("the quiz attempt list contains a non-object entry");
+    assertOnlyKeys(attempt, ["id", "pageId", "quizId", "quizRevision", "chosenOptionId", "correct", "sequence", "answeredAt"], "quiz attempt");
+    if (!isString(attempt.id, 200) || ids.has(attempt.id)) fail("a quiz attempt has a missing or duplicate id");
+    ids.add(attempt.id);
+    if (!isString(attempt.pageId, 200) || !pageIds.has(attempt.pageId)) fail(`quiz attempt ${attempt.id} belongs to a page that is not in the archive`);
+    if (!isString(attempt.quizId, 200) || !isString(attempt.chosenOptionId, 200) || typeof attempt.correct !== "boolean") fail(`quiz attempt ${attempt.id} is malformed`);
+    if (!isPositiveInteger(attempt.quizRevision) || !isPositiveInteger(attempt.sequence) || !isFiniteNumber(attempt.answeredAt)) fail(`quiz attempt ${attempt.id} has an invalid version, sequence or time`);
+    return {
+      id: attempt.id,
+      pageId: attempt.pageId,
+      quizId: attempt.quizId,
+      quizRevision: attempt.quizRevision,
+      chosenOptionId: attempt.chosenOptionId,
+      correct: attempt.correct,
+      sequence: attempt.sequence,
+      answeredAt: attempt.answeredAt,
     };
   });
 }
