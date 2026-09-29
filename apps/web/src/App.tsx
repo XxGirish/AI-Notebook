@@ -6,7 +6,8 @@ import type { AiTransactionRecord, NotebookObject } from "./domain/notebook";
 import { createNotebookPage, movePage, pageFromFixture, renamePage, replacePageObjects, setPagePaper, type NotebookPage } from "./domain/pages";
 import type { PaperStyle } from "./domain/paper";
 import { phaseZeroFixture } from "./fixtures/phaseZeroFixture";
-import { createStaticPageSvg, safeExportFilename } from "./export/staticPageExport";
+import { createStaticPageSvg, getStaticPageBounds, safeExportFilename } from "./export/staticPageExport";
+import { printSvg, svgToPngBlob } from "./export/rasterExport";
 import { createNotebookArchive, MAX_ARCHIVE_BYTES, NOTEBOOK_ARCHIVE_MIME, readNotebookArchive } from "./persistence/notebookArchive";
 import { cleanupOrphanAssets, deletePage, hasRecoverySnapshot, loadAssets, loadLibrary, loadPages, loadSources, restorePreviousPage, savePage, savePageOrder, storeImportedNotebook } from "./persistence/notebookDatabase";
 import { PageWriteConflictError } from "./persistence/pageRecords";
@@ -406,23 +407,37 @@ export function App() {
     }
   };
 
-  const exportActivePage = async () => {
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+  };
+
+  /** SVG, PNG and print all start from the same document-driven SVG of the active page. */
+  const exportActivePage = async (format: "svg" | "png" | "print") => {
     const page = pagesRef.current.find((candidate) => candidate.id === activePageIdRef.current);
     if (!page) return;
-    setTransferStatus("Rendering static page…");
+    setTransferStatus(format === "print" ? "Preparing the page for printing…" : "Rendering static page…");
     try {
       const hashes = page.objects.filter((object) => object.kind === "image").map((object) => object.assetHash);
       const assets = await loadAssets(hashes);
       const svg = await createStaticPageSvg(page, assets);
-      const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }));
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = safeExportFilename(page.title);
-      document.body.append(link);
-      link.click();
-      link.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
-      setTransferStatus(`Exported “${page.title}” as SVG`);
+      if (format === "svg") {
+        downloadBlob(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }), safeExportFilename(page.title));
+        setTransferStatus(`Exported “${page.title}” as SVG`);
+      } else if (format === "png") {
+        const bounds = getStaticPageBounds(page);
+        downloadBlob(await svgToPngBlob(svg, bounds.right - bounds.left, bounds.bottom - bounds.top), safeExportFilename(page.title, "png"));
+        setTransferStatus(`Exported “${page.title}” as PNG`);
+      } else {
+        await printSvg(svg, page.title);
+        setTransferStatus(`Sent “${page.title}” to the print dialog`);
+      }
     } catch (error) {
       setTransferStatus(error instanceof Error ? error.message : "Static page export failed");
     }
@@ -458,7 +473,7 @@ export function App() {
         onDelete={deleteNotebookPage}
         onRestore={restoreActivePage}
         onExport={() => { void exportNotebook(); }}
-        onExportPage={() => { void exportActivePage(); }}
+        onExportPage={(format) => { void exportActivePage(format); }}
         onImport={(file) => { void importNotebook(file); }}
         onTakeOver={() => writerLeaseRef.current?.takeOver()}
       />
