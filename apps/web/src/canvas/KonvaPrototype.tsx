@@ -46,7 +46,7 @@ import { InkStrokes } from "./InkStrokes";
 import { strokeWidthAt } from "./strokePath";
 import { InkTrail, limitPrediction, WetInkLayer, type WetStrokeStyle } from "./wetInk";
 import { expandGroupedIds, groupObjects, translateObjectGroup, ungroupObjects } from "./groupMath";
-import { objectIntersectsPolygon } from "./selectionMath";
+import { objectIntersectsPolygon, topmostBoxAt } from "./selectionMath";
 import { boundsFromPoints, sizeFromBottomRightHandle, type CanvasBounds } from "./shapeMath";
 import { gestureKindFor, isInkTool, pointerSamples, type TouchMode, type Tool } from "./pointerRouting";
 import { contactSize, inkingContactId, reportsContactGeometry, type Contact } from "./palmRejection";
@@ -106,7 +106,7 @@ type Position = { x: number; y: number };
 type Size = { width: number; height: number };
 type Gesture = {
   pointerId: number;
-  kind: "stroke" | "erase" | "pan" | "lasso" | "shape" | "text";
+  kind: "stroke" | "erase" | "pan" | "lasso" | "shape" | "arrow" | "text";
   lastScreen: Position;
   // The canvas rect is read once per gesture: reading it on every move forces
   // a layout whenever anything else on the page has changed.
@@ -117,7 +117,11 @@ type Gesture = {
   lastWorld?: Position;
   shapeType?: ShapeObject["shape"];
   handwriting?: boolean;
+  /** The object an arrow gesture started on; an arrow must start and end on one. */
+  arrowFromId?: string;
 };
+/** An arrow being dragged from one object towards another. */
+type ArrowDraft = { from: Position; to: Position; fromId?: string; toId?: string };
 type DraftBox = CanvasBounds & { shape: ShapeObject["shape"] | "text" };
 // A text box being typed into. A new box is not in the document until it has
 // text, so an abandoned box never becomes an empty object or a history step.
@@ -138,7 +142,7 @@ const isInkText = (object: NotebookObject): object is InkTextObject => object.ki
 const isText = (object: NotebookObject): object is TextObject => object.kind === "text";
 const TOOL_LABELS: Record<Tool, string> = {
   select: "Select", lasso: "Lasso", pen: "Pen", "pen-pro": "Pen Pro", highlighter: "Highlight",
-  eraser: "Eraser", rectangle: "Rectangle", ellipse: "Ellipse", text: "Text", pan: "Hand",
+  eraser: "Eraser", rectangle: "Rectangle", ellipse: "Ellipse", arrow: "Arrow", text: "Text", pan: "Hand",
 };
 // Pen Pro neatens once the writer pauses: long enough to finish a word, short enough to feel automatic.
 const HANDWRITING_PAUSE_MS = 1_200;
@@ -216,6 +220,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
   const [transientSizes, setTransientSizes] = useState<Record<string, Size>>({});
   const [lassoPoints, setLassoPoints] = useState<PointSample[]>([]);
   const [draftShape, setDraftShape] = useState<DraftBox>();
+  const [arrowDraft, setArrowDraft] = useState<ArrowDraft>();
   const [imageNotice, setImageNotice] = useState<string>();
   const [aiDraft, setAiDraft] = useState<PreparedCanvasBatch>();
   const [aiDraftError, setAiDraftError] = useState<string>();
@@ -235,6 +240,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
   const liveStrokeRef = useRef<PointSample[]>([]);
   const lassoPointsRef = useRef<PointSample[]>([]);
   const draftShapeRef = useRef<DraftBox>();
+  const arrowDraftRef = useRef<ArrowDraft>();
   const erasingIdsRef = useRef<Set<string>>(new Set());
   const gestureRef = useRef<Gesture>();
   const stylusSeenRef = useRef(false);
@@ -484,7 +490,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
       } else if (!modifier && event.key === "Enter") {
         if (editSelectedTextRef.current()) event.preventDefault();
       } else if (!modifier) {
-        const shortcut: Partial<Record<string, Tool>> = { v: "select", l: "lasso", p: "pen", w: "pen-pro", h: "highlighter", e: "eraser", r: "rectangle", o: "ellipse", t: "text", " ": "pan" };
+        const shortcut: Partial<Record<string, Tool>> = { v: "select", l: "lasso", p: "pen", w: "pen-pro", h: "highlighter", e: "eraser", r: "rectangle", o: "ellipse", a: "arrow", t: "text", " ": "pan" };
         const nextTool = shortcut[event.key.toLowerCase()];
         if (nextTool && (!readOnly || nextTool === "select" || nextTool === "pan")) {
           event.preventDefault();
@@ -947,6 +953,14 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
     }
   };
 
+  /** The node, shape or image under a world point, as currently drawn (including a drag in progress). */
+  const connectableAt = (point: Position) => topmostBoxAt(
+    connectables.map((object) => ({ id: object.id, ...positionFor(object), ...sizeFor(object) })),
+    point,
+    8 / camera.scale,
+  );
+  const centreOf = (box: { x: number; y: number; width: number; height: number }) => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
+
   const selectedConnectables = connectables.filter((object) => selectedIds.has(object.id));
   const connectSelection = () => {
     if (selectedConnectables.length !== 2) return;
@@ -1255,6 +1269,12 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
       setDraftShape(draft);
     } else if (kind === "erase") {
       eraseAt(startPoint);
+    } else if (kind === "arrow") {
+      const from = connectableAt(startPoint);
+      gestureRef.current.arrowFromId = from?.id;
+      const draft: ArrowDraft = { from: from ? centreOf(from) : startPoint, to: startPoint, fromId: from?.id };
+      arrowDraftRef.current = draft;
+      setArrowDraft(draft);
     }
   };
 
@@ -1299,6 +1319,12 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
     } else if (gesture.kind === "lasso") {
       lassoPointsRef.current = appendDistinctPoints(lassoPointsRef.current, points, 1 / camera.scale);
       setLassoPoints([...lassoPointsRef.current]);
+    } else if (gesture.kind === "arrow" && arrowDraftRef.current) {
+      const to = points.at(-1) ?? arrowDraftRef.current.to;
+      const target = connectableAt(to);
+      const draft: ArrowDraft = { ...arrowDraftRef.current, to, toId: target && target.id !== gesture.arrowFromId ? target.id : undefined };
+      arrowDraftRef.current = draft;
+      setArrowDraft(draft);
     } else if ((gesture.kind === "shape" || gesture.kind === "text") && gesture.startWorld) {
       gesture.lastWorld = points.at(-1) ?? gesture.startWorld;
       const bounds = boundsFromPoints(gesture.startWorld, gesture.lastWorld);
@@ -1366,6 +1392,25 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
       setTool("select");
     }
 
+    const completedArrow = arrowDraftRef.current;
+    if (!cancelled && gesture.kind === "arrow" && completedArrow?.fromId && completedArrow.toId && completedArrow.fromId !== completedArrow.toId) {
+      const connector: NotebookObject = {
+        id: `connector-${crypto.randomUUID()}`,
+        revision: 1,
+        kind: "connector",
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 0,
+        fromId: completedArrow.fromId,
+        toId: completedArrow.toId,
+      };
+      commitObjects((current) => [...current, connector]);
+      setSelectedIds(new Set([connector.id]));
+    } else if (!cancelled && gesture.kind === "arrow") {
+      showHandwritingNotice("An arrow goes from one node, shape or image to another", 2_500);
+    }
+
     const completedShape = draftShapeRef.current;
     if (!cancelled && gesture.kind === "shape" && completedShape && completedShape.width >= 8 && completedShape.height >= 8) {
       const shapeType = gesture.shapeType ?? "rectangle";
@@ -1413,9 +1458,11 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
     liveStrokeRef.current = [];
     lassoPointsRef.current = [];
     draftShapeRef.current = undefined;
+    arrowDraftRef.current = undefined;
     erasingIdsRef.current = new Set();
     setLassoPoints([]);
     setDraftShape(undefined);
+    setArrowDraft(undefined);
     setErasingIds(new Set());
   };
 
@@ -1506,6 +1553,7 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
             ["eraser", "Eraser", "E"],
             ["rectangle", "Rectangle", "R"],
             ["ellipse", "Ellipse", "O"],
+            ["arrow", "Arrow", "A"],
             ["text", "Text", "T"],
             ["pan", "Hand", "Space"],
           ] as const).map(([value, label, shortcut]) => (
@@ -2141,6 +2189,17 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
                     stroke="#ef8c45"
                     strokeWidth={1.5 / camera.scale}
                     dash={[8 / camera.scale, 6 / camera.scale]}
+                  />
+                )}
+                {arrowDraft && (
+                  <Arrow
+                    points={[arrowDraft.from.x, arrowDraft.from.y, arrowDraft.to.x, arrowDraft.to.y]}
+                    stroke={arrowDraft.toId ? "#2c5f5d" : "#8a9496"}
+                    fill={arrowDraft.toId ? "#2c5f5d" : "#8a9496"}
+                    strokeWidth={2 / camera.scale}
+                    pointerLength={10 / camera.scale}
+                    pointerWidth={10 / camera.scale}
+                    dash={arrowDraft.fromId && arrowDraft.toId ? undefined : [7 / camera.scale, 5 / camera.scale]}
                   />
                 )}
                 {draftShape && (

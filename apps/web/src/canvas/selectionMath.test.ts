@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GraphNodeObject, StrokeObject } from "../domain/notebook";
-import { objectIntersectsPolygon, pointInPolygon } from "./selectionMath";
+import { objectIntersectsPolygon, pointInPolygon, topmostBoxAt } from "./selectionMath";
 
 const polygon = [
   { x: 0, y: 0 },
@@ -48,5 +48,23 @@ describe("whole-object lasso geometry", () => {
       height: 140,
     };
     expect(objectIntersectsPolygon(node, polygon)).toBe(true);
+  });
+});
+
+describe("hit-testing boxes", () => {
+  const boxes = [
+    { id: "below", x: 0, y: 0, width: 100, height: 100 },
+    { id: "above", x: 50, y: 50, width: 100, height: 100 },
+  ];
+
+  it("returns the box drawn last where boxes overlap, and nothing on empty canvas", () => {
+    expect(topmostBoxAt(boxes, { x: 75, y: 75 })?.id).toBe("above");
+    expect(topmostBoxAt(boxes, { x: 10, y: 10 })?.id).toBe("below");
+    expect(topmostBoxAt(boxes, { x: 400, y: 400 })).toBeUndefined();
+  });
+
+  it("allows slack around a box for an imprecise finger", () => {
+    expect(topmostBoxAt(boxes, { x: -6, y: 10 })).toBeUndefined();
+    expect(topmostBoxAt(boxes, { x: -6, y: 10 }, 8)?.id).toBe("below");
   });
 });

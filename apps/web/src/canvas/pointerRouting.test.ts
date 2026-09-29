@@ -76,3 +76,11 @@ describe("canvas pointer routing", () => {
     expect(pointerSamples(event)).toEqual([a, b]);
   });
 });
+
+describe("arrow tool", () => {
+  it("routes every pointer type to an arrow gesture, except touch panning in stylus mode", () => {
+    expect(gestureKindFor({ tool: "arrow", pointerType: "mouse", touchMode: "finger" })).toBe("arrow");
+    expect(gestureKindFor({ tool: "arrow", pointerType: "touch", touchMode: "stylus" })).toBe("arrow");
+    expect(gestureKindFor({ tool: "arrow", pointerType: "pen", touchMode: "palm" })).toBe("arrow");
+  });
+});

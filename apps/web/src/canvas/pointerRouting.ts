@@ -1,5 +1,5 @@
-export type Tool = "select" | "lasso" | "pen" | "pen-pro" | "highlighter" | "eraser" | "rectangle" | "ellipse" | "text" | "pan";
-export type GestureKind = "stroke" | "erase" | "pan" | "lasso" | "shape" | "text";
+export type Tool = "select" | "lasso" | "pen" | "pen-pro" | "highlighter" | "eraser" | "rectangle" | "ellipse" | "arrow" | "text" | "pan";
+export type GestureKind = "stroke" | "erase" | "pan" | "lasso" | "shape" | "arrow" | "text";
 
 // Tools that lay down ink. Pen Pro belongs here for every purpose except the
 // name of the tool: it draws the same strokes and only neatens them afterwards,
@@ -46,6 +46,7 @@ export function gestureKindFor(routing: PointerRouting): GestureKind {
   if (routing.tool === "eraser") return "erase";
   if (routing.tool === "lasso") return "lasso";
   if (routing.tool === "rectangle" || routing.tool === "ellipse") return "shape";
+  if (routing.tool === "arrow") return "arrow";
   if (routing.tool === "text") return "text";
   return "stroke";
 }

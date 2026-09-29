@@ -37,3 +37,17 @@ export function objectIntersectsPolygon(object: NotebookObject, polygon: Point[]
   );
 }
 
+
+type Box = { id: string; x: number; y: number; width: number; height: number };
+
+/**
+ * The top-most box under a point, with a little slack around each so a small
+ * node is easy to hit with a finger. Later boxes are drawn on top, so they win.
+ */
+export function topmostBoxAt<T extends Box>(boxes: readonly T[], point: Point, slack = 0): T | undefined {
+  for (let index = boxes.length - 1; index >= 0; index -= 1) {
+    const box = boxes[index];
+    if (point.x >= box.x - slack && point.x <= box.x + box.width + slack && point.y >= box.y - slack && point.y <= box.y + box.height + slack) return box;
+  }
+  return undefined;
+}
