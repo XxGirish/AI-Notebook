@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cameraCentredOn, pinchCamera, MAX_ZOOM, MIN_ZOOM, wheelDeltaInPixels, wheelZoomScale, zoomCameraAt } from "./cameraMath";
+import { cameraCentredOn, keyboardRevealOffset, pinchCamera, recentreCamera, MAX_ZOOM, MIN_ZOOM, wheelDeltaInPixels, wheelZoomScale, zoomCameraAt } from "./cameraMath";
 
 describe("canvas camera", () => {
   it("keeps the world point under the pointer fixed while zooming", () => {
@@ -58,5 +58,25 @@ describe("pinch", () => {
     expect(pinchCamera(start, { x: 0, y: 0 }, { x: 10, y: 0 }, { x: 0, y: 0 }, { x: 1_000, y: 0 }).scale).toBe(MAX_ZOOM);
     expect(pinchCamera(start, { x: 0, y: 0 }, { x: 1_000, y: 0 }, { x: 0, y: 0 }, { x: 1, y: 0 }).scale).toBe(MIN_ZOOM);
     expect(pinchCamera(start, { x: 5, y: 5 }, { x: 5, y: 5 }, { x: 9, y: 5 }, { x: 30, y: 5 }).scale).toBe(1);
+  });
+});
+
+describe("viewport changes", () => {
+  it("keeps the middle of the view in the middle after a rotation", () => {
+    const camera = { x: 10, y: 20, scale: 2 };
+    const before = { width: 1024, height: 768 };
+    const after = { width: 768, height: 1024 };
+    const worldAtCentre = { x: (before.width / 2 - camera.x) / camera.scale, y: (before.height / 2 - camera.y) / camera.scale };
+    const next = recentreCamera(camera, before, after);
+    expect(next.scale).toBe(2);
+    expect(worldAtCentre.x * next.scale + next.x).toBe(after.width / 2);
+    expect(worldAtCentre.y * next.scale + next.y).toBe(after.height / 2);
+  });
+
+  it("moves an editor above the on-screen keyboard only as far as needed", () => {
+    expect(keyboardRevealOffset({ top: 100, bottom: 300 }, 600)).toBe(0);
+    expect(keyboardRevealOffset({ top: 400, bottom: 560 }, 500)).toBe(76);
+    // A tall editor is moved until its top reaches the margin, not past it.
+    expect(keyboardRevealOffset({ top: 60, bottom: 900 }, 500)).toBe(44);
   });
 });

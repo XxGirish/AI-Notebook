@@ -77,7 +77,7 @@ import {
   TEXT_LINE_HEIGHT,
   TEXT_PADDING,
 } from "./textBox";
-import { cameraCentredOn, pinchCamera, wheelDeltaInPixels, wheelZoomScale, zoomCameraAt, type Camera, type ScreenPoint } from "./cameraMath";
+import { cameraCentredOn, keyboardRevealOffset, pinchCamera, recentreCamera, wheelDeltaInPixels, wheelZoomScale, zoomCameraAt, type Camera, type ScreenPoint } from "./cameraMath";
 
 /** Text the chat panel asked to place on this page, as one editable card. */
 export type CanvasInsertRequest = {
@@ -381,6 +381,61 @@ export function KonvaPrototype({ fixture, readOnly = false, onObjectsChange, ins
     return () => {
       viewport.removeEventListener("wheel", handleWheel);
       viewport.removeEventListener("scroll", handleScroll);
+    };
+  }, []);
+
+  // A gesture must not be left half-done when the browser stops delivering its
+  // events: the app going to the background, or pointer capture lost without a
+  // pointerup (an element removed, a system gesture). The ink drawn so far is
+  // kept, as if the writer had lifted the pen there.
+  const endGestureRef = useRef(() => undefined as void);
+  endGestureRef.current = () => finishInput(false);
+  useEffect(() => {
+    const viewport = rootRef.current;
+    if (!viewport) return;
+    const handleVisibility = () => {
+      if (document.visibilityState === "hidden") endGestureRef.current();
+    };
+    const handleLostCapture = (event: PointerEvent) => {
+      if (gestureRef.current?.pointerId === event.pointerId) endGestureRef.current();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    viewport.addEventListener("lostpointercapture", handleLostCapture, { capture: true });
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      viewport.removeEventListener("lostpointercapture", handleLostCapture, { capture: true });
+    };
+  }, []);
+
+  // A rotation or resize keeps the middle of the page in the middle. A gesture
+  // in progress measured the old viewport, so it ends first.
+  const previousSizeRef = useRef(size);
+  useEffect(() => {
+    const previous = previousSizeRef.current;
+    previousSizeRef.current = size;
+    if (previous.width === 0 || previous.height === 0 || (previous.width === size.width && previous.height === size.height)) return;
+    if (gestureRef.current) endGestureRef.current();
+    setCamera((current) => recentreCamera(current, previous, size));
+  }, [size]);
+
+  // An on-screen keyboard shrinks only the visual viewport, and can cover the
+  // card or text box being typed into. Pan just enough to keep it in view.
+  useEffect(() => {
+    const viewport = rootRef.current;
+    const visual = window.visualViewport;
+    if (!viewport || !visual) return;
+    const reveal = () => {
+      const active = document.activeElement;
+      if (!(active instanceof HTMLElement) || !viewport.contains(active) || !active.matches("input, textarea, [contenteditable='true']")) return;
+      const offset = keyboardRevealOffset(active.getBoundingClientRect(), visual.offsetTop + visual.height);
+      if (offset > 0) setCamera((current) => ({ ...current, y: current.y - offset }));
+    };
+    const revealAfterFocus = () => window.setTimeout(reveal, 300);
+    visual.addEventListener("resize", reveal);
+    viewport.addEventListener("focusin", revealAfterFocus);
+    return () => {
+      visual.removeEventListener("resize", reveal);
+      viewport.removeEventListener("focusin", revealAfterFocus);
     };
   }, []);
 

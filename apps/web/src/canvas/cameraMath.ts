@@ -50,3 +50,27 @@ export function pinchCamera(start: Camera, startA: ScreenPoint, startB: ScreenPo
   const worldY = (startMid.y - start.y) / start.scale;
   return { scale, x: mid.x - worldX * scale, y: mid.y - worldY * scale };
 }
+
+/**
+ * After the viewport changes size (a rotation, a window resize, a panel
+ * opening), keeps the world point that was in the middle of the view in the
+ * middle, at the same zoom, rather than pinning the top-left corner.
+ */
+export function recentreCamera(camera: Camera, previous: { width: number; height: number }, next: { width: number; height: number }): Camera {
+  return {
+    scale: camera.scale,
+    x: camera.x + (next.width - previous.width) / 2,
+    y: camera.y + (next.height - previous.height) / 2,
+  };
+}
+
+/**
+ * How far to move the view up so a focused editor clears the on-screen
+ * keyboard, in screen pixels; zero when it is already visible.
+ */
+export function keyboardRevealOffset(editor: { top: number; bottom: number }, visibleBottom: number, margin = 16): number {
+  const overlap = editor.bottom + margin - visibleBottom;
+  if (overlap <= 0) return 0;
+  // Never push the top of the editor above the visible area to show its bottom.
+  return Math.max(0, Math.min(overlap, editor.top - margin));
+}
