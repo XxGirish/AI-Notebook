@@ -37,7 +37,9 @@ Follow the phased plan, completing the necessary foundation before layering feat
 
 Initial tools include pen, highlighter, whole-stroke eraser, whole-object lasso/selection, move/resize/group, text, shapes, bound arrows, and images. Use one scene model for infinite canvas and optional bounded paper frames within notebook pages.
 
-Defer automatic sync/CRDTs, multiuser editing, PDF/RAG ingestion, embeddings/vector databases, voice, native wrappers, advanced OCR training, partial-stroke editing, autonomous agents, and predictive mastery until the core is dependable or the user explicitly changes scope. The plan's effort estimates are estimates, not delivery promises.
+**Scope change (2026-09-29, user request):** uploaded sources (PDF, .docx, .txt/.md, read on the device) with on-device keyword retrieval and a right-side chat panel with citations are now in scope; see `docs/decisions/0013-sources-retrieval-and-chat-panel.md`. Chat answers reach the page only through "Add to page" and the normal validated batch path.
+
+Defer automatic sync/CRDTs, multiuser editing, embeddings/vector databases, OCR of scanned PDFs, voice, native wrappers, advanced OCR training, partial-stroke editing, autonomous agents, and predictive mastery until the core is dependable or the user explicitly changes scope. The plan's effort estimates are estimates, not delivery promises.
 
 ## 4. Technology baseline and canvas decision
 

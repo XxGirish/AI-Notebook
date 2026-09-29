@@ -25,7 +25,7 @@ describe("gateway configuration", () => {
     expect(message).not.toContain("short-secret-value");
 
     const config = loadConfig({ AI_PROVIDER: "deepseek", DEEPSEEK_API_KEY: "sk-live-secret", GATEWAY_ACCESS_TOKEN: token });
-    expect(config.deepseek).toMatchObject({ model: "deepseek-flash", outputMode: "strict_tool" });
+    expect(config.deepseek).toMatchObject({ model: "deepseek-flash", outputMode: "json_object" });
     const described = JSON.stringify(describeConfig(config));
     expect(described).not.toContain("sk-live-secret");
     expect(described).not.toContain(token);

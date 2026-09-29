@@ -296,6 +296,7 @@ button { font: inherit; }
 .learning-card--quiz-card { background: #fff8ea; border-color: #dbb986; }
 .learning-card h3 { margin: 0 0 9px; color: #25373b; font-size: 1rem; line-height: 1.32; }
 .learning-card p { margin: 0; color: #506064; font-size: 0.84rem; line-height: 1.5; }
+.learning-card--text-card p { white-space: pre-line; }
 .learning-card__handle {
   position: absolute;
   inset: 0 0 auto;

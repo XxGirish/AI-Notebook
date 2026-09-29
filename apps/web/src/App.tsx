@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { KonvaPrototype } from "./canvas/KonvaPrototype";
+import { KonvaPrototype, type CanvasInsertOutcome, type CanvasInsertRequest } from "./canvas/KonvaPrototype";
+import { ChatDock } from "./components/chat/ChatDock";
 import { PageSidebar } from "./components/PageSidebar";
 import type { AiTransactionRecord, NotebookObject } from "./domain/notebook";
 import { createNotebookPage, pageFromFixture, renamePage, replacePageObjects, type NotebookPage } from "./domain/pages";
@@ -32,6 +33,26 @@ export function App() {
   const writerLeaseRef = useRef<ReturnType<typeof createWriterLease>>();
   const assetCleanupTimerRef = useRef<number>();
   const serviceWorkerRef = useRef<NotebookServiceWorker>();
+  const [canvasInsert, setCanvasInsert] = useState<CanvasInsertRequest>();
+  const insertResolversRef = useRef(new Map<string, (outcome: CanvasInsertOutcome) => void>());
+
+  /** The chat asks; the open page's canvas validates, lays out and commits the card as one undoable step. */
+  const addChatAnswerToPage = useCallback((answer: Omit<CanvasInsertRequest, "id">) => new Promise<CanvasInsertOutcome>((resolve) => {
+    if (!activePageIdRef.current) {
+      resolve({ ok: false, message: "Open a page first." });
+      return;
+    }
+    const id = crypto.randomUUID();
+    insertResolversRef.current.set(id, resolve);
+    setCanvasInsert({ ...answer, id });
+  }), []);
+
+  const handleCanvasInsert = useCallback((id: string, outcome: CanvasInsertOutcome) => {
+    insertResolversRef.current.get(id)?.(outcome);
+    insertResolversRef.current.delete(id);
+    // Cleared so a canvas remounted for another page never sees a request meant for this one.
+    setCanvasInsert((current) => (current?.id === id ? undefined : current));
+  }, []);
 
   const replacePages = (next: NotebookPage[]) => {
     pagesRef.current = next;
@@ -433,9 +454,25 @@ export function App() {
         </aside>
 
         {activePage && (
-          <KonvaPrototype key={`${activePage.id}:${canvasGeneration}`} fixture={activePage} readOnly={writerStatus !== "writer"} onObjectsChange={updateActivePageObjects} />
+          <KonvaPrototype
+            key={`${activePage.id}:${canvasGeneration}`}
+            fixture={activePage}
+            readOnly={writerStatus !== "writer"}
+            onObjectsChange={updateActivePageObjects}
+            insertRequest={canvasInsert}
+            onInsertRequestHandled={handleCanvasInsert}
+          />
         )}
       </div>
+
+      <ChatDock
+        pages={pages}
+        activePageId={activePageId}
+        isOnline={isOnline}
+        readOnly={writerStatus !== "writer"}
+        onAddToPage={addChatAnswerToPage}
+        onOpenPage={setActivePageId}
+      />
     </main>
   );
 }

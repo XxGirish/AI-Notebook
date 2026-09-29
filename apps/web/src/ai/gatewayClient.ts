@@ -1,4 +1,4 @@
-import type { GatewayCapabilities, GatewayErrorCode, GatewayEvent, GenerateRequest } from "@ai-notebook/ai-contract";
+import type { ChatEvent, ChatRequest, GatewayCapabilities, GatewayErrorCode, GatewayEvent, GenerateRequest } from "@ai-notebook/ai-contract";
 
 /**
  * The browser half of the gateway protocol. It only transports events: every
@@ -180,6 +180,51 @@ export async function streamGeneration(request: GenerateRequest, options: Stream
     parser.end();
   } finally {
     // An aborted stream leaves the gateway's reader open unless it is released.
+    reader.cancel().catch(() => undefined);
+  }
+}
+
+const CHAT_EVENT_TYPES = new Set(["started", "delta", "usage", "complete", "error"]);
+
+export type StreamChatOptions = GatewayClientOptions & {
+  signal?: AbortSignal;
+  onEvent: (event: ChatEvent) => void;
+};
+
+/** Streams one chat answer. The text is untrusted prose: it is rendered as text, never as HTML. */
+export async function streamChat(request: ChatRequest, options: StreamChatOptions): Promise<void> {
+  const call = options.fetchImpl ?? fetch;
+  const response = await call(join(options.baseUrl, "/api/ai/chat"), {
+    method: "POST",
+    headers: headers(options, "application/json"),
+    body: JSON.stringify(request),
+    signal: options.signal,
+  });
+  if (!response.ok) throw await errorFromResponse(response);
+  if (!response.body) throw new GatewayError("provider_unavailable", "The gateway returned no stream.", true);
+
+  const parser = createSseParser((_eventName, data) => {
+    let value: unknown;
+    try {
+      value = JSON.parse(data);
+    } catch {
+      throw new GatewayError("provider_unavailable", "The gateway sent an event that could not be read.", true);
+    }
+    const type = (value as { type?: unknown } | null)?.type;
+    if (typeof type === "string" && CHAT_EVENT_TYPES.has(type)) options.onEvent(value as ChatEvent);
+  });
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parser.push(decoder.decode(value, { stream: true }));
+    }
+    parser.push(decoder.decode());
+    parser.end();
+  } finally {
     reader.cancel().catch(() => undefined);
   }
 }

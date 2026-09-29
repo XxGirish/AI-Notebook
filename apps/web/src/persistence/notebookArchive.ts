@@ -157,7 +157,7 @@ function validateObject(value: unknown): NotebookObject {
   return structuredClone(value) as NotebookObject;
 }
 
-const AI_INTENTS = new Set(["teach_section", "explain_selection", "create_diagram", "create_equation", "create_quiz"]);
+const AI_INTENTS = new Set(["teach_section", "explain_selection", "create_diagram", "create_equation", "create_quiz", "chat_answer"]);
 
 function validateAiTransaction(value: unknown): AiTransactionRecord {
   if (!isRecord(value)) fail("a page contains a non-object AI transaction");

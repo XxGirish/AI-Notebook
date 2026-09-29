@@ -1,41 +1,20 @@
 import {
   AI_INTENTS,
+  AI_REQUEST_PLANS,
   MAX_GENERATE_REQUEST_BYTES,
   type AiIntent,
   type ContextItem,
   type GenerateRequest,
-  type SemanticOperationType,
 } from "@ai-notebook/ai-contract";
 import { collectDiagrams } from "../domain/diagramAdapter";
 import type { NotebookObject } from "../domain/notebook";
 
-/**
- * What one AI action is allowed to ask for. The browser decides this, not the
- * model and not the gateway: the same plan is sent with the request and used
- * again locally when the returned proposal is validated, so a proposal that
- * exceeds the action can never reach the page.
- */
-export type AiRequestPlan = {
-  label: string;
-  permittedOperations: SemanticOperationType[];
-  maxOperations: number;
-  /** Actions that read the writer's work refuse to run with nothing selected. */
-  requiresContext: boolean;
-};
-
-// `propose_object_update` is deliberately absent from every plan: no action
-// exposed on the canvas yet rewrites existing objects, so no request permits it
-// and `targets` stays empty.
-export const AI_REQUEST_PLANS: Record<AiIntent, AiRequestPlan> = {
-  teach_section: { label: "Teach a section", permittedOperations: ["insert_lesson_section"], maxOperations: 2, requiresContext: false },
-  explain_selection: { label: "Explain selection", permittedOperations: ["insert_explanation"], maxOperations: 2, requiresContext: true },
-  create_diagram: { label: "Create diagram", permittedOperations: ["insert_diagram"], maxOperations: 1, requiresContext: true },
-  create_equation: { label: "Create equation", permittedOperations: ["insert_equation"], maxOperations: 2, requiresContext: true },
-  create_quiz: { label: "Create quiz", permittedOperations: ["insert_quiz"], maxOperations: 3, requiresContext: true },
-};
-
-/** The actions Phase 3 puts on the canvas toolbar, in toolbar order. */
-export const AI_CANVAS_ACTIONS: AiIntent[] = ["teach_section", "explain_selection", "create_diagram", "create_quiz"];
+// The plans themselves live in the shared contract so the gateway's prompt
+// evaluation builds exactly the requests this module builds. The browser is
+// still the only thing that applies them: it sends the plan with the request and
+// checks the returned proposal against it again locally, so a proposal that
+// exceeds the action can never reach the page.
+export { AI_CANVAS_ACTIONS, AI_REQUEST_PLANS, type AiRequestPlan } from "@ai-notebook/ai-contract";
 
 /** Contract ceilings, applied here so an over-long note is trimmed rather than refused. */
 const LIMITS = {

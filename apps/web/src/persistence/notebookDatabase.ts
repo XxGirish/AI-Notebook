@@ -26,11 +26,53 @@ export type AssetRecord = {
   createdAt: number;
 };
 
+/** An uploaded file, kept as extracted text only; the original file is not stored. */
+export type SourceRecord = {
+  id: string;
+  name: string;
+  kind: "pdf" | "docx" | "text";
+  size: number;
+  /** SHA-256 of the original file, so the same file is not added twice. */
+  contentHash: string;
+  pageCount?: number;
+  chunkCount: number;
+  characterCount: number;
+  /** Whether the chat may retrieve from it. */
+  enabled: boolean;
+  addedAt: number;
+};
+
+export type SourceChunkRecord = {
+  id: string;
+  sourceId: string;
+  ordinal: number;
+  page?: number;
+  text: string;
+};
+
+/** A cited passage as it was sent, so an old answer's citations still open after the source changes or is removed. */
+export type ChatCitation = { id: string; origin: string; locator: string; text: string; sourceId?: string; pageId?: string; objectId?: string };
+
+export type ChatMessageRecord = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: number;
+  citations?: ChatCitation[];
+  /** Set when an answer stopped early; its text is kept but it is not sent back as context. */
+  incomplete?: boolean;
+  provider?: string;
+  model?: string;
+};
+
 class NotebookDatabase extends Dexie {
   pages!: EntityTable<PageMetadataRecord, "id">;
   pageObjects!: Table<PageObjectRecord, PageObjectKey>;
   recoverySnapshots!: EntityTable<PageRecoveryPatch, "pageId">;
   assets!: EntityTable<AssetRecord, "hash">;
+  sources!: EntityTable<SourceRecord, "id">;
+  sourceChunks!: EntityTable<SourceChunkRecord, "id">;
+  chatMessages!: EntityTable<ChatMessageRecord, "id">;
 
   constructor(name = "ai-notebook") {
     super(name);
@@ -59,6 +101,16 @@ class NotebookDatabase extends Dexie {
       recoverySnapshots: "pageId, capturedAt",
       assets: "hash, createdAt",
     }).upgrade(splitStoredPages);
+    // Version 5 adds uploaded sources and the chat history. Nothing existing changes.
+    this.version(5).stores({
+      pages: "id, createdAt, updatedAt",
+      pageObjects: "[pageId+objectId], pageId, kind",
+      recoverySnapshots: "pageId, capturedAt",
+      assets: "hash, createdAt",
+      sources: "id, addedAt, contentHash",
+      sourceChunks: "id, sourceId",
+      chatMessages: "id, createdAt",
+    });
   }
 }
 
@@ -304,4 +356,47 @@ export async function cleanupOrphanAssets(): Promise<{ removedCount: number; rem
     await database.assets.bulkDelete(orphanHashes);
     return { removedCount: orphanHashes.length, removedBytes };
   });
+}
+
+export async function loadSources(): Promise<SourceRecord[]> {
+  return database.sources.orderBy("addedAt").toArray();
+}
+
+export async function loadSourceChunks(): Promise<SourceChunkRecord[]> {
+  return database.sourceChunks.toArray();
+}
+
+export async function findSourceByHash(contentHash: string): Promise<SourceRecord | undefined> {
+  return database.sources.where("contentHash").equals(contentHash).first();
+}
+
+/** Adds a source and all of its passages together, so a failed write leaves no half-added file. */
+export async function storeSource(source: SourceRecord, chunks: SourceChunkRecord[]): Promise<void> {
+  await database.transaction("rw", database.sources, database.sourceChunks, async () => {
+    await database.sources.add(source);
+    await database.sourceChunks.bulkAdd(chunks);
+  });
+}
+
+export async function setSourceEnabled(sourceId: string, enabled: boolean): Promise<void> {
+  await database.sources.update(sourceId, { enabled });
+}
+
+export async function deleteSource(sourceId: string): Promise<void> {
+  await database.transaction("rw", database.sources, database.sourceChunks, async () => {
+    await database.sourceChunks.where("sourceId").equals(sourceId).delete();
+    await database.sources.delete(sourceId);
+  });
+}
+
+export async function loadChatMessages(): Promise<ChatMessageRecord[]> {
+  return database.chatMessages.orderBy("createdAt").toArray();
+}
+
+export async function saveChatMessage(message: ChatMessageRecord): Promise<void> {
+  await database.chatMessages.put(message);
+}
+
+export async function clearChatMessages(): Promise<void> {
+  await database.chatMessages.clear();
 }

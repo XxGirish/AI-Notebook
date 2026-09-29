@@ -1,5 +1,6 @@
 import type { UsageReport } from "@ai-notebook/ai-contract";
-import { ProviderError, type AiProvider, type ProviderCall, type ProviderResult } from "../types";
+import { ProviderError, type AiProvider, type ChatCall, type ChatResult, type ProviderCall, type ProviderResult } from "../types";
+import { buildChatMessages, CHAT_PROMPT_VERSION } from "./chatPrompt";
 import { buildSystemPrompt, buildUserPrompt, PROMPT_VERSION, PROPOSAL_TOOL_NAME } from "./prompt";
 import { buildStrictProposalSchema } from "./providerSchema";
 import { readSseData } from "./sse";
@@ -58,6 +59,10 @@ export class DeepSeekProvider implements AiProvider {
 
   get configurationId() {
     return `deepseek:${this.options.model}:${this.options.outputMode}:thinking-disabled:${PROMPT_VERSION}`;
+  }
+
+  get chatConfigurationId() {
+    return `deepseek:${this.options.model}:chat:thinking-disabled:${CHAT_PROMPT_VERSION}`;
   }
 
   buildRequestBody({ request, repair }: Omit<ProviderCall, "signal">): Record<string, unknown> {
@@ -187,6 +192,92 @@ export class DeepSeekProvider implements AiProvider {
     if (call0 && call0.name !== PROPOSAL_TOOL_NAME) protocolIssues.push(`Expected tool ${PROPOSAL_TOOL_NAME}, received ${call0.name.slice(0, 80)}`);
     return { text: (call0?.arguments ?? "").trim(), protocolIssues, usage };
   }
+
+  /**
+   * Streams one chat answer. Text is forwarded as it arrives; the finish reason
+   * still decides whether the answer was complete, so a cut-off answer ends in
+   * an error the panel can show rather than passing for a whole one.
+   */
+  async chat(call: ChatCall): Promise<ChatResult> {
+    const { signal } = call;
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.options.baseUrl.replace(/\/+$/, "")}/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.options.apiKey}`,
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify(buildChatRequestBody(this.options.model, this.options.maxOutputTokens, call)),
+        signal,
+      });
+    } catch (error) {
+      if (signal.aborted) throw new ProviderError("cancelled", "The answer was cancelled", false);
+      throw new ProviderError("provider_unavailable", `DeepSeek could not be reached: ${errorName(error)}`, true);
+    }
+    if (!response.ok) throw await httpError(response);
+    if (!response.body) throw new ProviderError("provider_unavailable", "DeepSeek returned no response stream", true);
+
+    let finishReason: string | undefined;
+    let usage: UsageReport | undefined;
+    let outputCharacters = 0;
+    try {
+      for await (const data of readSseData(response.body)) {
+        if (data === "[DONE]") break;
+        let chunk: StreamChunk;
+        try {
+          chunk = JSON.parse(data) as StreamChunk;
+        } catch {
+          throw new ProviderError("provider_unavailable", "DeepSeek sent a malformed stream event", true);
+        }
+        if (chunk.usage) usage = usageFrom(chunk.usage);
+        const choice = chunk.choices?.[0];
+        if (!choice) continue;
+        const text = choice.delta?.content;
+        if (typeof text === "string" && text.length > 0) {
+          outputCharacters += text.length;
+          if (outputCharacters > MAX_CHAT_OUTPUT_CHARACTERS) {
+            throw new ProviderError("truncated", "The answer exceeded the gateway's output size limit", false);
+          }
+          await call.onDelta(text);
+        }
+        if (choice.finish_reason) finishReason = choice.finish_reason;
+      }
+    } catch (error) {
+      if (signal.aborted) throw new ProviderError("cancelled", "The answer was cancelled", false);
+      if (error instanceof ProviderError) throw error;
+      throw new ProviderError("provider_unavailable", `DeepSeek stream failed: ${errorName(error)}`, true);
+    }
+
+    if (signal.aborted) throw new ProviderError("cancelled", "The answer was cancelled", false);
+    switch (finishReason) {
+      case "stop":
+        return { usage };
+      case "length":
+        throw new ProviderError("truncated", "The answer was cut off by the output token limit", false);
+      case "content_filter":
+        throw new ProviderError("refused", "DeepSeek declined to answer this", false);
+      case undefined:
+        throw new ProviderError("provider_unavailable", "The DeepSeek stream ended before completion", true);
+      default:
+        throw new ProviderError("provider_unavailable", `DeepSeek stopped early (${finishReason})`, true);
+    }
+  }
+}
+
+export const MAX_CHAT_OUTPUT_CHARACTERS = 40_000;
+
+/** The request body for a chat turn: plain prose, thinking disabled, on the stable endpoint. */
+export function buildChatRequestBody(model: string, maxOutputTokens: number, call: Pick<ChatCall, "request">): Record<string, unknown> {
+  return {
+    model,
+    messages: buildChatMessages(call.request),
+    thinking: { type: "disabled" },
+    max_tokens: maxOutputTokens,
+    stream: true,
+    stream_options: { include_usage: true },
+  };
 }
 
 function usageFrom(raw: NonNullable<StreamChunk["usage"]>): UsageReport {
