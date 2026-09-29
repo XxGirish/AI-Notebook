@@ -27,6 +27,13 @@ type RunGenerationOptions = {
   timedOut: () => boolean;
   emit: (event: GatewayEvent) => Promise<void> | void;
   maxRepairAttempts?: number;
+  /**
+   * Why an attempt was rejected. The HTTP gateway never passes this, so nothing
+   * it carries can reach a client: the browser still receives only the generic
+   * `invalid_proposal` message. The prompt evaluation passes it, because a
+   * failure rate is not actionable without the validator's reasons.
+   */
+  onAttempt?: (attempt: { index: number; accepted: boolean; errors: string[]; outputCharacters: number; output: string }) => void;
 };
 
 const MAX_REPORTED_ISSUES = 10;
@@ -73,7 +80,7 @@ export function checkProposalText(text: string, protocolIssues: string[], reques
  * and at most one repair. Only a complete validated proposal is emitted; the
  * browser still rechecks it against current page revisions before committing.
  */
-export async function runGeneration({ request, provider, signal, timedOut, emit, maxRepairAttempts = 1 }: RunGenerationOptions): Promise<GenerationOutcome> {
+export async function runGeneration({ request, provider, signal, timedOut, emit, maxRepairAttempts = 1, onAttempt }: RunGenerationOptions): Promise<GenerationOutcome> {
   let usage: UsageReport = {};
   let calls = 0;
   let repair: RepairContext | undefined;
@@ -106,6 +113,13 @@ export async function runGeneration({ request, provider, signal, timedOut, emit,
 
     await emit({ type: "progress", phase: "validating" });
     const checked = checkProposalText(result.text, result.protocolIssues, request);
+    onAttempt?.({
+      index: attempt,
+      accepted: "proposal" in checked,
+      errors: "errors" in checked ? checked.errors : [],
+      outputCharacters: result.text.length,
+      output: result.text,
+    });
     if ("proposal" in checked) {
       await emit({ type: "usage", usage, calls });
       await emit({ type: "proposal", proposal: checked.proposal, repairAttempts: attempt });

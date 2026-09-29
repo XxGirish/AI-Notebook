@@ -7,7 +7,8 @@
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "eval": "tsx src/eval/runEval.ts"
   },
   "dependencies": {
     "@ai-notebook/ai-contract": "0.0.0",
